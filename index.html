@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DonauDodge</title>
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      font-family: 'Pixelify Sans', monospace;
+      background: black;
+    }
+
+    #highscore, #score {
+      position: fixed;
+      z-index: 20;
+      color: white;
+      text-shadow: -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black;
+    }
+
+    #highscore {
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 20px;
+    }
+
+    #score {
+      top: 42px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 22px;
+      background: black;
+      border-radius: 12px;
+      padding: 6px 12px;
+    }
+
+    #background-base, #background-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      width: 800%;
+      background-size: auto 100%;
+      background-repeat: repeat-x;
+      background-position: center center;
+      z-index: 0;
+    }
+
+    #background-base {
+      background-image: url('background.webp');
+      animation: scrollBgSlow 120s linear infinite;
+    }
+
+    #background-overlay {
+      background-image: url('background2.webp');
+      animation: scrollBgFast 60s linear infinite;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    @keyframes scrollBgSlow {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    @keyframes scrollBgFast {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    #wrapper {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      z-index: 10;
+      transform-origin: center;
+    }
+
+    #backgroundIcon {
+      transform: scale(1.68);
+      width: 100%;
+      height: 100%;
+      background: url('gif_bg.webp') no-repeat center;
+      background-size: auto 100%;
+    }
+
+    #animation {
+      position: absolute;
+      transform: scale(1.2);
+      width: 136%;
+      height: 136%;
+      top: -50%;
+      left: -18%;
+      object-fit: contain;
+    }
+
+    .heli {
+      position: absolute;
+      width: 200px;
+      transform: rotate(-6deg);
+      animation: heliFloat 2s ease-in-out infinite;
+      z-index: 5;
+    }
+
+    @keyframes heliFloat {
+      0%, 100% { transform: translateY(0) rotate(-6deg); }
+      50% { transform: translateY(-20px) rotate(-6deg); }
+    }
+
+    #gameover {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 100;
+      text-align: center;
+    }
+
+    #gameover img {
+      width: 300px;
+    }
+
+    #finalScoreText {
+      margin-top: 12px;
+      font-size: 24px;
+      color: black;
+      text-shadow: -1px -1px 0 white, 1px -1px 0 white, -1px 1px 0 white, 1px 1px 0 white;
+    }
+
+    #gameover button {
+      font-size: 20px;
+      margin-top: 16px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      border: none;
+      background: white;
+      cursor: pointer;
+      font-family: 'Pixelify Sans', monospace;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+      transition: transform 0.2s ease-in-out;
+    }
+
+    #gameover button:hover {
+      transform: scale(1.2);
+    }
+
+    #startscreen {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: black;
+      z-index: 999;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 60px;
+    }
+
+    #bgvideo {
+      position: fixed;
+      top: 0;
+      left: 0;
+      min-width: 100%;
+      min-height: 100%;
+      object-fit: cover;
+      z-index: -1;
+    }
+
+    #startscreen div {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+
+    #startscreen div:hover,
+    #exit-btn:hover {
+      transform: scale(1.1);
+    }
+
+    #startscreen img {
+      width: 120px;
+      height: 120px;
+    }
+
+    #exit-btn {
+      display: none;
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      font-family: 'Pixelify Sans', monospace;
+      color: white;
+      background: red;
+      padding: 6px 12px;
+      border-radius: 8px;
+      z-index: 100;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: bold;
+      transition: transform 0.3s ease;
+    }
+
+    
+
+      #startscreen img {
+        width: 180px !important;
+        height: 180px !important;
+      }
+
+      #startscreen div {
+        font-size: 24px;
+      }
+    }
+
+  
+@media (max-width: 768px) {
+  html, body {
+    height: 100vh;
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+  }
+
+  #startscreen {
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    gap: 5vw;
+    padding: 0 5vw;
+    box-sizing: border-box;
+  }
+
+  #startscreen div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 10px;
+    max-width: 54px;
+    text-align: center;
+  }
+
+  #startscreen img {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  #bgvideo {
+    object-fit: cover;
+    position: fixed;
+    top: 0;
+    left: 0;
+    min-width: 100%;
+    min-height: 100%;
+    z-index: -1;
+  }
+}
+
+</style>
+</head>
+<body>
+  <div id="startscreen">
+    <video autoplay muted loop playsinline id="bgvideo">
+      <source src="video.mp4" type="video/mp4">
+    </video>
+    <div onclick="location.href='mailto:hey@sabelfeldlars.com'">
+      <img src="mail.webp" />
+      <div style="color: white;">Mail</div>
+    </div>
+    <div onclick="startGame()">
+      <img src="game.webp" />
+      <div style="color: white;">DonauDodge</div>
+    </div>
+    <div onclick="location.href='https://www.linkedin.com/in/lars-sabelfeld/'">
+      <img src="linkedin.webp" />
+      <div style="color: white;">LinkedIn</div>
+    </div>
+  </div>
+
+  <div id="exit-btn" onclick="exitGame()">✕ Exit</div>
+  <div id="background-base"></div>
+  <div id="background-overlay"></div>
+  <div id="score">Score: 0</div>
+  <div id="highscore">Highscore: 0</div>
+  <div id="gameover">
+    <img src="gameover.gif" alt="Game Over" />
+    <p id="finalScoreText">Score: 0</p>
+    <button onclick="restartGame()">Restart</button>
+  </div>
+  <div id="wrapper">
+    <div id="backgroundIcon"></div>
+    <img id="animation" src="animation.gif" />
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
