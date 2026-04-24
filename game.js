@@ -317,7 +317,12 @@ function measureBgTiles() {
     else img.addEventListener('load', apply, { once: true });
   };
   setFromImg('background.webp?v=2',  w => { _bgBaseTileW = w; });
-  setFromImg('foreground.webp?v=1', w => { _bgOverTileW = w; });
+  /* Skip the foreground overlay on fx-low — it's hidden anyway (see
+     startGame), and not downloading/decoding it saves ~228 KB of
+     memory + decode time on low-RAM devices. */
+  if (!document.documentElement.classList.contains('fx-low')) {
+    setFromImg('foreground.webp?v=1', w => { _bgOverTileW = w; });
+  }
 }
 measureBgTiles();
 window.addEventListener('resize', () => {
@@ -421,6 +426,15 @@ function togglePause() {
 
 /* ── animationend auto-cleanup ─────────────────────────────────── */
 scorePill.addEventListener('animationend', () => scorePill.classList.remove('pop'));
+/* Combo pill: clear the `level-up` flash class when its keyframe ends so a
+   second level-up within the same combo re-triggers the animation cleanly
+   (we already force-reflow before re-adding, but clearing here is a belt-
+   and-suspenders guard against stuck classes if the reflow is batched). */
+comboPill.addEventListener('animationend', (e) => {
+  if (e.animationName && e.animationName.indexOf('comboLevelUp') !== -1) {
+    comboPill.classList.remove('level-up');
+  }
+});
 
 /* ── Canvas & stars ────────────────────────────────────────────── */
 /* Stars are generated once in a normalised [0..1] coordinate space
@@ -889,6 +903,12 @@ function spawnHeli(extraDelay = 0) {
 /* Bonus spawns at high difficulty */
 function trySpawn() {
   spawnHeli();
+  /* fx-low: skip bonus double/triple spawns. Each extra active heli is
+     one more DOM element with a per-frame style.transform write; on
+     Chaos mode the original code could have ~8 helis at once which
+     alone pushes a weak iPad's style-recalc budget over the line.
+     The game still ramps in difficulty via speed + base spawn rate. */
+  if (document.documentElement.classList.contains('fx-low')) return;
   if (g.score >= 50 && Math.random() < 0.35) spawnHeli(360 + Math.random() * 200);
   else if (g.score >= 30 && Math.random() < 0.22) spawnHeli(420 + Math.random() * 280);
 }
@@ -1754,13 +1774,38 @@ function triggerGameOver(hitEl) {
    after restart" bugs caused by orphaned loops holding loopActive. */
 let loopActive = false;
 let loopToken  = 0;
+/* ── 30 FPS throttle on low-tier devices ────────────────────────────
+   Single biggest CPU win for 5+ year old iPads / budget Android:
+   halve the number of main-loop ticks per real second. The existing
+   dt-based physics already absorbs variable frame time correctly, so
+   the game keeps moving at the SAME world speed — helis just redraw
+   at 30 Hz instead of 60. At 30 Hz the motion still reads smoothly
+   on a 60 Hz display (no visible judder at this pace). Mid/high keep
+   full 60 fps. We can also live-downgrade once _fpsDowngraded triggers. */
+function _shouldThrottleTo30() {
+  return document.documentElement.classList.contains('fx-low');
+}
 function startLoop() {
   loopToken++;
   loopActive = true;
   lastTs = 0;
   const tok = loopToken;
+  let _skip = false;
   const step = ts => {
     if (tok !== loopToken || !loopActive) return;
+    /* On low tier: service the loop on every OTHER rAF (≈30 fps).
+       We still call requestAnimationFrame every frame so the callback
+       queue stays healthy — we just skip the expensive work on odd frames.
+       Re-read the flag each frame so the auto-downgrade picks up mid-run. */
+    if (_shouldThrottleTo30()) {
+      _skip = !_skip;
+      if (_skip) {
+        requestAnimationFrame(step);
+        return;
+      }
+    } else {
+      _skip = false;
+    }
     loop(ts);
     if (tok === loopToken && loopActive) requestAnimationFrame(step);
   };
@@ -2038,10 +2083,16 @@ function startGame() {
   $('aurora').style.display      = 'none';
   $('stars').style.display       = 'none';
   $('bg-base').style.display     = 'block';
-  $('bg-over').style.display     = 'block';
-  if (lampFlicker) lampFlicker.style.display = 'block';
-  $('clouds').style.display      = 'block';
-  $('vignette').style.display    = 'block';
+  /* On low-tier devices (old iPad, budget Android), render only ONE
+     parallax layer + no vignette — the foreground.webp overlay doubles
+     per-frame background-position writes and repaint area, and the
+     radial-gradient vignette is another full-viewport compositor pass.
+     Keeping just the main background still reads as a moving world. */
+  const _isLow = document.documentElement.classList.contains('fx-low');
+  $('bg-over').style.display     = _isLow ? 'none' : 'block';
+  if (lampFlicker) lampFlicker.style.display = _isLow ? 'none' : 'block';
+  $('clouds').style.display      = _isLow ? 'none' : 'block';
+  $('vignette').style.display    = _isLow ? 'none' : 'block';
   $('exit-btn').classList.add('show');
   $('pause-btn').classList.add('show');
   /* shoot button stays hidden — only shown while firepower is active */
