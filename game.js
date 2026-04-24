@@ -11,13 +11,139 @@
    • Game-over badges stacked via JS class (matched to HTML change)
 ═══════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════
+   Performance tier detection — runs BEFORE any DOM lookups so CSS
+   tier classes are applied in the first paint. Three tiers drive how
+   much visual cost the device gets to pay:
+
+     fx-high — desktop w/ ≥8 cores & ≥8 GB mem, or explicit marker
+     fx-mid  — typical mobile (4-cores, 2-4 GB), or coarse pointer
+     fx-low  — everything slower, or prefers-reduced-motion
+
+   Each tier gates the heaviest effects via CSS:
+     low → no bg motion-blur, smaller backdrop-filter radii, fewer
+           particles, no player-blur, no speed-lines
+     mid → moderated blur radii, reduced particle cap
+     high → full effects
+
+   A manual override is respected (?fx=low/mid/high in the URL, or
+   localStorage 'dd_fx_tier') — useful for testing and for users who
+   want to force a cheaper mode on a borderline device. */
+const PERF = (() => {
+  const url = new URLSearchParams(location.search);
+  const manual = url.get('fx') || localStorage.getItem('dd_fx_tier');
+  if (manual === 'low' || manual === 'mid' || manual === 'high') return manual;
+
+  const reduce = matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return 'low';
+
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem   = navigator.deviceMemory || 4;
+  const coarse = matchMedia && matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const narrow = window.innerWidth < 560;
+
+  /* ── GPU probe via WebGL unmasked renderer ──────────────────────
+     Safari's backdrop-filter runs ~3× slower than Chromium's. Intel
+     integrated GPUs (Iris Plus, UHD 6xx, HD 6xx) hit the GPU ceiling
+     long before the CPU does — and those are exactly what you get in
+     5+ year old MacBook Airs / base MBPs. Neither of these cases is
+     visible from hardwareConcurrency/deviceMemory. So we also probe
+     the actual GPU, and force a mid tier for those cases. */
+  let weakGpu = false;
+  try {
+    const gl = document.createElement('canvas').getContext('webgl')
+            || document.createElement('canvas').getContext('experimental-webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
+      const r = String(renderer).toLowerCase();
+      /* Known weak integrated GPUs — Intel Iris / HD / UHD, older AMD
+         integrated (Radeon HD), and anything ANGLE-wrapped that still
+         reports Intel. Apple M1+ / Apple GPU / NVIDIA / modern AMD are
+         all plenty fast. */
+      if (/intel.*(iris|hd graphics|uhd graphics)/.test(r)) weakGpu = true;
+      else if (/amd.*radeon.*hd/.test(r))                   weakGpu = true;
+      else if (/mali-[g4-7]|adreno 5\d{2}/.test(r))         weakGpu = true;
+    }
+  } catch (_) { /* probing failed — fall through to heuristics */ }
+
+  /* Safari has a meaningfully slower backdrop-filter implementation.
+     Even on a capable Mac, heavy blurs stutter noticeably. Starting
+     at mid saves the first 2 s of gameplay while auto-downgrade is
+     still averaging. Note: we keep high-tier possible for Apple
+     Silicon Macs even on Safari — those handle it fine. */
+  const ua = navigator.userAgent || '';
+  const isSafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(ua);
+  const isMac    = /Macintosh/.test(ua);
+  /* Apple Silicon Macs report "Apple" or "Apple M" in the GPU renderer.
+     Intel Macs report the Intel GPU. So weakGpu catches Intel Macs; if
+     that's tripped on Safari, we definitely want mid-at-best. */
+
+  /* Low-end signals: little memory, few cores, or narrow mobile screens */
+  if (mem <= 2 || cores <= 2) return 'low';
+  if (weakGpu && isMac && isSafari) return 'low';  /* 5-yr Intel Mac on Safari */
+  if (weakGpu) return 'mid';
+  if (isSafari && isMac && cores <= 4) return 'mid';
+  if (coarse && (mem <= 4 || cores <= 4 || narrow)) return 'mid';
+  if (mem <= 4 && cores <= 4) return 'mid';
+  return 'high';
+})();
+document.documentElement.classList.add(`fx-${PERF}`);
+document.addEventListener('DOMContentLoaded', () => {
+  document.body.classList.add(`fx-${PERF}`);
+});
+/* Expose for manual tweaking in DevTools: window.__setFxTier('low') */
+window.__setFxTier = (t) => {
+  ['low','mid','high'].forEach(x => {
+    document.documentElement.classList.remove(`fx-${x}`);
+    document.body.classList.remove(`fx-${x}`);
+  });
+  document.documentElement.classList.add(`fx-${t}`);
+  document.body.classList.add(`fx-${t}`);
+  localStorage.setItem('dd_fx_tier', t);
+};
+
+/* Particle-count cap scales with tier so lower devices aren't spending
+   tens of ms/frame in tickParticles(). */
+const PARTICLE_CAP = PERF === 'low' ? 60 : (PERF === 'mid' ? 140 : 260);
+
 /* ── Difficulty presets ────────────────────────────────────────── */
+/* Apple system colors — semantic traffic-light ramp:
+     Easy   = systemGreen  (#30D158) — "go, safe"
+     Normal = systemYellow (#FFD60A) — "caution"
+     Hard   = warm red-orange (#FF5C3A) — "warning", pushed closer to
+              red than systemOrange so Hard reads as genuinely intense.
+              Stops just short of systemRed (#FF453A) which stays
+              reserved for actual failure states like game-over/crash. */
 const DIFF = {
-  easy:   { speedStart:1.8, spawnStart:2400, rampSpeed:0.07, rampSpawn:55,  minSpawn:620, label:'Easy',   color:'#30D158', bg:'rgba(48,209,88,0.22)',  border:'rgba(48,209,88,0.42)',  glow:'rgba(48,209,88,0.28)'  },
-  normal: { speedStart:2.5, spawnStart:1800, rampSpeed:0.13, rampSpawn:85,  minSpawn:380, label:'Normal', color:'#007AFF', bg:'rgba(0,122,255,0.18)',  border:'rgba(0,122,255,0.42)',  glow:'rgba(0,122,255,0.28)'  },
-  hard:   { speedStart:3.8, spawnStart:1100, rampSpeed:0.20, rampSpawn:110, minSpawn:260, label:'Hard',   color:'#FF453A', bg:'rgba(255,69,58,0.22)',  border:'rgba(255,69,58,0.42)',  glow:'rgba(255,69,58,0.28)'  },
+  easy:   { speedStart:1.8, spawnStart:2400, rampSpeed:0.07, rampSpawn:55,  minSpawn:620, label:'Easy',   color:'#30D158', bg:'rgba(48,209,88,0.22)',   border:'rgba(48,209,88,0.42)',   glow:'rgba(48,209,88,0.28)'   },
+  normal: { speedStart:2.5, spawnStart:1800, rampSpeed:0.13, rampSpawn:85,  minSpawn:380, label:'Normal', color:'#FFD60A', bg:'rgba(255,214,10,0.20)',  border:'rgba(255,214,10,0.46)',  glow:'rgba(255,214,10,0.30)'  },
+  hard:   { speedStart:3.8, spawnStart:1100, rampSpeed:0.20, rampSpawn:110, minSpawn:260, label:'Hard',   color:'#FF5C3A', bg:'rgba(255,92,58,0.22)',   border:'rgba(255,92,58,0.46)',   glow:'rgba(255,92,58,0.30)'   },
 };
 const HELI_SRCS = ['heli-yellow.webp', 'heli-blue.webp', 'heli-white.webp'];
+
+/* Decode heli sprites on idle so the first few spawns don't trigger a
+   sync image-decode on the main thread. Without this, on slower devices
+   the first heli of each color can cause a 20-40 ms freeze the moment
+   it's added to the DOM (Safari decodes lazily on first paint). */
+(function preloadHelis() {
+  const preload = () => {
+    HELI_SRCS.forEach(src => {
+      const img = new Image();
+      img.src = src;
+      if (img.decode) img.decode().catch(() => {});
+    });
+    /* Also prewarm the explosion GIF reference — same problem on first
+       crash, the GIF has to decode under real-time pressure. */
+    const ex = new Image();
+    ex.src = 'explosion.gif';
+  };
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(preload, { timeout: 2000 });
+  } else {
+    setTimeout(preload, 200);
+  }
+})();
 
 const LEVELS = [
   { at:  0, name: 'Take off'    },
@@ -52,6 +178,18 @@ const levelFlash= $('level-flash');
 const pauseBtn    = $('pause-btn');
 const pauseOverlay= $('pause-overlay');
 const diffModal   = $('diff-modal');
+/* Hot-path HUD refs — the main loop used to call $() for each of these
+   every frame (60×/sec). getElementById is fast but not free; cache once
+   at startup. Elements that are created/destroyed dynamically aren't in
+   this list — those stay looked up on demand. */
+const slowPill    = $('slow-pill');
+const slowTime    = $('slow-time');
+const fpPill      = $('fp-pill');
+const fpTime      = $('fp-time');
+const shieldPill  = $('shield-pill');
+const shieldTime  = $('shield-time');
+const shieldRing  = $('shield-ring');
+const shootBtn    = $('shoot-btn');
 
 /* ── Highscore (per-difficulty) ────────────────────────────────── */
 const getHs  = d   => parseInt(localStorage.getItem(`dd_hs_${d}`) || '0');
@@ -87,6 +225,58 @@ let _glowBand = -1;
    every ~240s (tile width rarely divided 4000 evenly). */
 let bgBaseScrollPx = 0, bgOverScrollPx = 0;
 let _bgBaseTileW = 0, _bgOverTileW = 0;
+/* Cached CSS-var state — written only on meaningful change so the main
+   loop doesn't spam style recalcs every frame. */
+let _lastSpeedTier;
+let _lastVelBlur = 0;
+/* Cached HUD-timer values — the three powerup countdown pills show
+   whole seconds, but the main loop runs at 60 Hz. Writing textContent
+   every frame forces the browser to repaint the pill every frame even
+   when the displayed number is unchanged. Cache the last displayed int
+   and skip the write when it matches. */
+let _lastSlowSec = -1, _lastFpSec = -1, _lastShSec = -1;
+
+/* Adaptive quality — rolling frame-time average. If the game runs
+   meaningfully below 60 fps for a sustained stretch on a high/mid tier
+   device, quietly downgrade the tier class. The user sees an instant
+   smoothness boost (blur radii collapse, fewer particles) without any
+   gameplay change. Only downgrades, never upgrades, and only once per
+   session so we don't flip back and forth. */
+let _fpsWindowSum   = 0;    /* ms of frames summed */
+let _fpsWindowFrames = 0;   /* frames counted in window */
+let _fpsDowngraded  = false;
+function _maybeAutoDowngrade(frameMs) {
+  if (_fpsDowngraded) return;
+  if (PERF === 'low') { _fpsDowngraded = true; return; }
+  /* Skip obvious outliers (tab refocus, GC spike) */
+  if (frameMs > 80) return;
+  _fpsWindowSum += frameMs;
+  _fpsWindowFrames++;
+  /* Evaluate once per ~2 s of real time */
+  if (_fpsWindowSum < 2000) return;
+  const avgMs = _fpsWindowSum / _fpsWindowFrames;
+  const avgFps = 1000 / avgMs;
+  _fpsWindowSum = 0;
+  _fpsWindowFrames = 0;
+  /* Thresholds chosen conservatively — a healthy phone sits well above 50 */
+  if (avgFps < 45) {
+    const target = PERF === 'high' ? 'mid' : 'low';
+    _fpsDowngraded = true;
+    ['low','mid','high'].forEach(x => {
+      document.documentElement.classList.remove(`fx-${x}`);
+      document.body.classList.remove(`fx-${x}`);
+    });
+    document.documentElement.classList.add(`fx-${target}`);
+    document.body.classList.add(`fx-${target}`);
+    /* Persist so next reload starts already at the cheaper tier and
+       doesn't spend the first 2 s stuttering before we re-detect. */
+    try { localStorage.setItem('dd_fx_tier', target); } catch (_) {}
+    /* Also shrink the particle cap live — the const PARTICLE_CAP is
+       frozen at load, but MAX_PARTS governs the hard drop in spawnTrail
+       and is a const too; the CSS-side savings alone usually pull fps
+       back above 50, which is the main goal. */
+  }
+}
 const BG_BASE_PX_PER_FRAME = 1.35;   /* tuned for a gentle parallax at heliSpeed 2.5 */
 const BG_OVER_PX_PER_FRAME = 2.60;   /* foreground moves ~2× faster */
 
@@ -250,10 +440,16 @@ function drawStars() {
 }
 
 /* ── Input ─────────────────────────────────────────────────────── */
+/* High-polling mice can fire mousemove up to 1000 Hz. We only consume
+   the target position once per animation frame anyway (in updatePlayer)
+   so anything more frequent is waste — every event bubbles through the
+   addEventListener chain, and if the handler did any layout work we'd
+   be thrashing. Keep the handlers tiny and stateless. (Already are,
+   just documenting the intent.) */
 document.addEventListener('mousemove', e => {
   ptx = e.clientX - 50;
   pty = e.clientY - 50;
-});
+}, { passive: true });
 document.addEventListener('touchmove', e => {
   e.preventDefault();
   ptx = e.touches[0].clientX - 50;
@@ -423,6 +619,7 @@ function playLaunchTransition(onReady, from) {
   const shade   = document.getElementById('launch-shade');
   const balloon = document.getElementById('launch-balloon');
   const streaks = document.getElementById('launch-streaks');
+  const ring    = document.getElementById('launch-ring');
   const flash   = document.getElementById('launch-flash');
   const start   = document.getElementById('startscreen');
   const goCard  = document.querySelector('#gameover .go-card');
@@ -456,6 +653,10 @@ function playLaunchTransition(onReady, from) {
   /* Speed-lines kick in right as the balloon stretches into lift-off. */
   setTimeout(() => retrigger(streaks), 160);
 
+  /* Shockwave ring blooms from the lift-off point — times with the
+     balloon's stretch-launch keyframe (~36% of 0.96s ≈ 345 ms). */
+  setTimeout(() => retrigger(ring), 310);
+
   /* Camera shake at the rocket ascent peak. */
   setTimeout(() => {
     document.body.classList.remove('launch-shake');
@@ -468,19 +669,20 @@ function playLaunchTransition(onReady, from) {
      punches through the top of the frame. */
   setTimeout(() => retrigger(flash), 480);
 
-  /* Scene swap — do it while the balloon is still blowing past the top
-     of the viewport so the countdown "3" lands on a clean frame. */
+  /* Scene swap — slightly later than before (720 ms vs 620) so the
+     longer 0.86s launchZoom has time to glide through its mid-blur
+     frames before the scene cuts. Feels less abrupt. */
   setTimeout(() => {
     if (start)  start.classList.remove('launching');
     if (goCard) goCard.classList.remove('launching');
     if (goRoot) goRoot.classList.remove('launching');
     onReady && onReady();
-  }, 620);
+  }, 720);
 
-  /* Cleanup after the last animation finishes (~960ms balloon). */
+  /* Cleanup after the last animation finishes (~1 s balloon + ring). */
   setTimeout(() => {
-    [shade, balloon, streaks, flash].forEach(el => el && el.classList.remove('play'));
-  }, 1100);
+    [shade, balloon, streaks, ring, flash].forEach(el => el && el.classList.remove('play'));
+  }, 1200);
 }
 window.playLaunchTransition = playLaunchTransition;
 
@@ -495,7 +697,9 @@ window.flyAgain = flyAgain;
 
 /* ── Particles ─────────────────────────────────────────────────── */
 const parts = [];
-const MAX_PARTS = 220;
+/* Hard-cap particles by perf tier — on low-end this halves the canvas
+   fill rate burden and the JS loop work inside tickParticles(). */
+const MAX_PARTS = PARTICLE_CAP;
 
 function spawnTrail(dt) {
   const spd = Math.hypot(pvx, pvy);
@@ -520,12 +724,20 @@ function spawnTrail(dt) {
 
 function tickParticles(dt) {
   vfxCtx.clearRect(0, 0, vfx.width, vfx.height);
-  /* Single save/restore; group-set globalAlpha per particle */
+  /* Swap-and-pop instead of splice(i,1) — splice is O(n) because it
+     shifts every element after i. On low-end devices with 60+ dying
+     particles per frame this dominated tickParticles(). Swap-and-pop
+     is O(1) and order doesn't matter for additive particles. */
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     p.x += p.vx * dt; p.y += p.vy * dt;
     p.life -= 0.042 * dt;
-    if (p.life <= 0) { parts.splice(i, 1); continue; }
+    if (p.life <= 0) {
+      const last = parts.length - 1;
+      if (i !== last) parts[i] = parts[last];
+      parts.pop();
+      continue;
+    }
     vfxCtx.globalAlpha = p.a * p.life;
     vfxCtx.beginPath();
     vfxCtx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
@@ -536,12 +748,13 @@ function tickParticles(dt) {
 }
 
 /* ── Speed lines ───────────────────────────────────────────────── */
-/* Persistent lines — much cheaper than per-frame canvas gradients */
+/* Persistent lines — much cheaper than per-frame canvas gradients.
+   Disabled entirely on low-tier devices; reduced count on mid-tier. */
 const speedLines = [];
-const MAX_SPEED_LINES = 14;
+const MAX_SPEED_LINES = PERF === 'low' ? 0 : (PERF === 'mid' ? 8 : 14);
 
 function drawSpeedLines(spd) {
-  if (spd < 2) return;
+  if (spd < 2 || MAX_SPEED_LINES === 0) return;
   const alpha = Math.min((spd - 2) / 16, 0.11);
   const target = Math.min(MAX_SPEED_LINES, Math.floor(spd / 3));
   while (speedLines.length < target) {
@@ -800,6 +1013,7 @@ function activateFirePower() {
 
 function deactivateFirePower() {
   firePowerUntil = 0;
+  _lastFpSec = -1;
   document.body.classList.remove('firepower-active');
   const sb = $('shoot-btn');
   if (sb) sb.classList.remove('show');
@@ -855,6 +1069,7 @@ function activateShield() {
 
 function deactivateShield() {
   shieldUntil = 0;
+  _lastShSec = -1;
   document.body.classList.remove('shield-active');
   const sp = $('shield-pill');
   if (sp) sp.classList.remove('show');
@@ -863,12 +1078,11 @@ function deactivateShield() {
 }
 
 function positionShieldRing() {
-  const ring = $('shield-ring');
-  if (!ring || !ring.classList.contains('show')) return;
+  if (!shieldRing || !shieldRing.classList.contains('show')) return;
   /* Keyframe animates transform using --sx / --sy vars — updating them
      here is the only way to move the ring without fighting the animation. */
-  ring.style.setProperty('--sx', `${px.toFixed(1)}px`);
-  ring.style.setProperty('--sy', `${py.toFixed(1)}px`);
+  shieldRing.style.setProperty('--sx', `${px.toFixed(1)}px`);
+  shieldRing.style.setProperty('--sy', `${py.toFixed(1)}px`);
 }
 
 /* ── Bullets ───────────────────────────────────────────────────── */
@@ -1060,24 +1274,92 @@ function nearMissEffect(x, y) {
   setTimeout(() => pop.remove(), 900);
 }
 
-/* ── Combo ─────────────────────────────────────────────────────── */
-function registerDodge() {
-  g.score++;
+/* ── Combo & scoring ────────────────────────────────────────────
+   Tiered multiplier that rewards sustained dodging without turning
+   the early game into a grind.
+
+     combo  < 3  →  ×1  (casual play — unchanged from before)
+     combo  3–4  →  ×2
+     combo  5–7  →  ×3
+     combo 8–11  →  ×4
+     combo 12+   →  ×5  (cap)
+
+   Every registerDodge() awards `mult` points. A near-miss awards an
+   additional `mult` bonus on top, so near-misses are always worth
+   2× a regular dodge. The combo window is still 2.5 s — miss that
+   window and the counter (and the multiplier) fall back to 1.
+
+   A subtle "+N" popup floats up from the player whenever the
+   multiplier is >1, so the bonus is visible at the moment of reward. */
+function comboMult(combo) {
+  /* Nerfed ramp — the old 3/5/8/12 ramp with a ×2 near-miss stack
+     produced 10 pts per dodge at high combo, which made late-game
+     runaway. New thresholds demand more sustained dodging to climb,
+     and the top is capped at ×3. Near-miss now awards a flat +1
+     instead of doubling (see registerDodge). Max per dodge = 4 pts. */
+  if (combo < 4) return 1;
+  if (combo < 9) return 2;
+  return 3;
+}
+
+function registerDodge(isNearMiss) {
+  /* Increment combo first so the multiplier reflects THIS dodge. */
+  clearTimeout(g.comboTimer);
+  const prevMult = comboMult(g.combo);
+  g.combo++;
+  const mult = comboMult(g.combo);
+
+  /* Score award — flat +1 bonus on near-miss (additive, not ×2).
+     Keeps near-miss rewarding without compounding with the combo mult. */
+  const points = mult + (isNearMiss ? 1 : 0);
+  g.score += points;
   scorePill.textContent = `Score: ${g.score}`;
   scorePill.classList.remove('pop');
   void scorePill.offsetWidth;
   scorePill.classList.add('pop');
   checkLevel();
-  clearTimeout(g.comboTimer);
-  g.combo++;
-  if (g.combo >= 3) {
-    comboPill.textContent = `${g.combo}× Combo!`;
+
+  /* Visible combo pill once the multiplier actually kicks in (combo ≥ 4,
+     where mult becomes ×2). Showing "×1" at combo 3 would be noise. */
+  if (g.combo >= 4) {
+    comboPill.innerHTML =
+      `<span class="cp-count">${g.combo}×</span>` +
+      `<span class="cp-mult">×${mult}</span>`;
+    comboPill.setAttribute('data-mult', String(mult));
     comboPill.classList.add('show');
+    /* Flash briefly when the multiplier tier steps up */
+    if (mult > prevMult) {
+      comboPill.classList.remove('level-up');
+      void comboPill.offsetWidth;
+      comboPill.classList.add('level-up');
+    }
   }
+
+  /* Floating "+N" bonus popup at the player — only when a multiplier
+     is actually in effect, so low-combo play doesn't spam the screen. */
+  if (points > 1) {
+    const pop = document.createElement('div');
+    pop.className = 'bonus bonus-combo';
+    pop.textContent = `+${points}`;
+    pop.style.left = (px + 50) + 'px';
+    pop.style.top  = (py - 4)  + 'px';
+    if (mult >= 5)      pop.style.color = '#ff9a8a';
+    else if (mult >= 4) pop.style.color = '#ffc08a';
+    else if (mult >= 3) pop.style.color = '#ffe08a';
+    else                pop.style.color = '#ffe49a';
+    pop.style.textShadow = '0 0 10px rgba(255,200,70,0.7), 0 2px 6px rgba(0,0,0,0.5)';
+    document.body.appendChild(pop);
+    setTimeout(() => pop.remove(), 900);
+  }
+
+  /* Combo decay — same 2.5 s window as before. Reset also clears the
+     pill, so the player always sees WHY their multiplier dropped. */
   g.comboTimer = setTimeout(() => {
     g.combo = 0;
-    comboPill.classList.remove('show');
+    comboPill.classList.remove('show', 'level-up');
+    comboPill.removeAttribute('data-mult');
   }, 2500);
+
   if (typeof igCheckScoreMilestone === 'function') igCheckScoreMilestone();
 }
 
@@ -1160,6 +1442,22 @@ function updatePlayer(dt) {
       ? ''
       : `drop-shadow(0 0 ${band * 5}px rgba(120,200,255,${(band * 0.14).toFixed(2)}))`;
   }
+
+  /* Velocity-based motion blur on the balloon icon. Scales with pvx+pvy
+     magnitude and relaxes back to 0 at rest. Writes only on meaningful
+     change (rounded to 0.1px) so style recalcs don't pile up. Skipped
+     entirely on mid/low tiers — blur() on a filtered element is one of
+     the most expensive things a mobile GPU can do per-frame. */
+  if (PERF === 'high') {
+    const targetBlur = spd > 3 ? Math.min((spd - 3) * 0.12, 1.6) : 0;
+    if (Math.abs(targetBlur - _lastVelBlur) > 0.08) {
+      _lastVelBlur = targetBlur;
+      if (targetBlur > 0 && !document.body.classList.contains('play-blur')) {
+        document.body.classList.add('play-blur');
+      }
+      document.body.style.setProperty('--vel-blur', targetBlur.toFixed(2) + 'px');
+    }
+  }
 }
 
 /* ── Score count-up ────────────────────────────────────────────── */
@@ -1183,7 +1481,8 @@ function triggerGameOver(hitEl) {
   if (g.glowRafId) { cancelAnimationFrame(g.glowRafId); g.glowRafId = null; }
   clearTimeout(g.comboTimer);
   g.comboTimer = null;
-  comboPill.classList.remove('show');
+  comboPill.classList.remove('show', 'level-up');
+  comboPill.removeAttribute('data-mult');
   parts.length = 0;
   /* Kill any in-flight countdown so "3"/"2"/"1"/GO don't linger over game-over */
   clearCountdown();
@@ -1212,7 +1511,7 @@ function triggerGameOver(hitEl) {
   };
   glowFade();
 
-  playerIcon.style.backgroundImage = "url('gif_bg2.webp?v=2')";
+  playerIcon.style.backgroundImage = "url('balloon-crashed.webp?v=1')";
   if (hitEl) hitEl._crashed = true;
 
   /* Survivors keep flying — give them a small momentum burst so it's
@@ -1265,12 +1564,12 @@ function triggerGameOver(hitEl) {
 
     /* Confetti — only on new highscore */
     if (isNew) {
-      const kon = document.createElement('img');
-      kon.src = 'kon.gif?t=' + Date.now();
-      kon.style.cssText = `position:fixed;left:50%;top:6px;transform:translateX(-50%);
+      const confetti = document.createElement('img');
+      confetti.src = 'confetti.gif?t=' + Date.now();
+      confetti.style.cssText = `position:fixed;left:50%;top:6px;transform:translateX(-50%);
         width:260px;z-index:250;pointer-events:none;`;
-      document.body.appendChild(kon);
-      setTimeout(() => kon.remove(), 2600);
+      document.body.appendChild(confetti);
+      setTimeout(() => confetti.remove(), 2600);
     }
 
     gameoverEl.classList.add('show');
@@ -1305,8 +1604,11 @@ function startLoop() {
 function loop(ts) {
   if (g.paused) { loopActive = false; return; }
 
-  const dt = lastTs ? Math.min((ts - lastTs) / 16.667, 3) : 1;
+  const rawMs = lastTs ? (ts - lastTs) : 16.667;
+  const dt = lastTs ? Math.min(rawMs / 16.667, 3) : 1;
   lastTs = ts;
+  /* Watch fps; auto-downgrade tier if sustained below threshold. */
+  if (!g.over) _maybeAutoDowngrade(rawMs);
 
   if (!g.over) {
     updatePlayer(dt);
@@ -1322,6 +1624,31 @@ function loop(ts) {
      there is no seam jump at cycle boundaries. */
   if (!g.over) {
     const speedMul = g.heliSpeed / 2.5;  /* heliSpeed 2.5 ≈ baseline */
+    /* ── Speed tier drives motion blur + dynamic vignette + saturation
+       on the bg layers via CSS variables. Throttled to only write when
+       the tier changes by ≥ 0.02, so the loop stays cheap. The tier is
+       a 0..1 scalar built from the current heliSpeed above its baseline
+       (2.5); it saturates near heliSpeed ~7. Slow-mo pulls it back so
+       the world feels calm during slow-mo. */
+    /* Only update the motion-blur CSS var on high-tier devices — on
+       mid/low the CSS gates (.fx-mid / .fx-low) zero the blur out
+       anyway, so writing the var every frame would just cost style
+       recalc for no visible difference. */
+    if (PERF === 'high') {
+      const baseTier   = Math.max(0, Math.min((g.heliSpeed - 2.5) / 4.5, 1));
+      const slowPull   = ts < slowmoUntil ? 0.35 : 1;
+      /* Quantise to 0.1 steps → only 11 discrete values across the whole
+         session. Two wins: (a) CSS var writes drop by ~5× vs the old
+         0.02 threshold, so style-recalc work in the loop nearly
+         disappears; (b) the blur kernel only changes 11 times ever, so
+         the GPU filter cache can keep the pre-computed kernel hot between
+         frames instead of rebuilding it per minor speed change. */
+      const targetTier = Math.round(baseTier * slowPull * 10) / 10;
+      if (_lastSpeedTier !== targetTier) {
+        _lastSpeedTier = targetTier;
+        document.body.style.setProperty('--speed-tier', targetTier.toFixed(1));
+      }
+    }
     if (_bgBaseTileW > 0) {
       bgBaseScrollPx = (bgBaseScrollPx + BG_BASE_PX_PER_FRAME * dt * speedMul) % _bgBaseTileW;
       bgBase.style.backgroundPositionX = `${-bgBaseScrollPx}px`;
@@ -1350,12 +1677,15 @@ function loop(ts) {
   const slow = ts < slowmoUntil ? 0.35 : 1;
   if (slow === 1 && document.body.classList.contains('slowmo-active')) {
     document.body.classList.remove('slowmo-active');
-    const sp = $('slow-pill');
-    if (sp) sp.classList.remove('show');
+    _lastSlowSec = -1;
+    if (slowPill) slowPill.classList.remove('show');
   } else if (slow !== 1) {
-    /* Update countdown pill */
-    const slowTime = $('slow-time');
-    if (slowTime) slowTime.textContent = Math.max(0, Math.ceil((slowmoUntil - ts) / 1000));
+    /* Update countdown pill — only when the whole-second value changes */
+    const sec = Math.max(0, Math.ceil((slowmoUntil - ts) / 1000));
+    if (sec !== _lastSlowSec) {
+      _lastSlowSec = sec;
+      if (slowTime) slowTime.textContent = sec;
+    }
   }
 
   /* Update helis — continue after crash so survivors keep flying;
@@ -1368,14 +1698,15 @@ function loop(ts) {
     const hw = 200, hh = h._h || 80;
     if (!h._counted && h._x + hw < px) {
       const dy = Math.abs((h._top + hh / 2) - (py + 50));
-      if (!g.over && dy < 90) {
+      const isNearMiss = !g.over && dy < 90;
+      if (isNearMiss) {
         nearMissEffect(h._x + hw, h._top + hh / 2);
-        g.score++;
         g.misses = (g.misses | 0) + 1;
-        if (typeof igCheckMissMilestone  === 'function') igCheckMissMilestone();
-        if (typeof igCheckScoreMilestone === 'function') igCheckScoreMilestone();
+        if (typeof igCheckMissMilestone === 'function') igCheckMissMilestone();
       }
-      if (!g.over) registerDodge();  /* registerDodge also does score++ */
+      /* registerDodge awards mult points; near-miss doubles it there
+         (no longer += 1 here — that would double-count on every pass). */
+      if (!g.over) registerDodge(isNearMiss);
       h._counted = true;
     }
     if (!g.over && hit(px, py, h._x, h._top, hw, hh)) {
@@ -1436,8 +1767,11 @@ function loop(ts) {
     if (ts >= firePowerUntil) {
       deactivateFirePower();
     } else {
-      const fpTime = $('fp-time');
-      if (fpTime) fpTime.textContent = Math.max(0, Math.ceil((firePowerUntil - ts) / 1000));
+      const sec = Math.max(0, Math.ceil((firePowerUntil - ts) / 1000));
+      if (sec !== _lastFpSec) {
+        _lastFpSec = sec;
+        if (fpTime) fpTime.textContent = sec;
+      }
     }
   }
 
@@ -1447,12 +1781,14 @@ function loop(ts) {
       deactivateShield();
     } else {
       const left = shieldUntil - ts;
-      const shTime = $('shield-time');
-      if (shTime) shTime.textContent = Math.max(0, Math.ceil(left / 1000));
-      const ring = $('shield-ring');
-      if (ring) {
-        if (left < 1500) ring.classList.add('expire');
-        else             ring.classList.remove('expire');
+      const sec = Math.max(0, Math.ceil(left / 1000));
+      if (sec !== _lastShSec) {
+        _lastShSec = sec;
+        if (shieldTime) shieldTime.textContent = sec;
+      }
+      if (shieldRing) {
+        if (left < 1500) shieldRing.classList.add('expire');
+        else             shieldRing.classList.remove('expire');
       }
       positionShieldRing();
     }
@@ -1586,7 +1922,7 @@ function _doReturnToMenu(opts) {
   deactivateShield();
   clearCountdown();
   vfxCtx.clearRect(0, 0, vfx.width, vfx.height);
-  document.querySelectorAll('img[src^="fire.gif"], img[src^="kon.gif"], img[src^="explosion.gif"]')
+  document.querySelectorAll('img[src^="fire.gif"], img[src^="confetti.gif"], img[src^="explosion.gif"]')
     .forEach(e => e.remove());
   document.querySelectorAll('.bonus').forEach(e => e.remove());
   if (typeof clearIngameFeed === 'function') clearIngameFeed();
@@ -1600,10 +1936,18 @@ function _doReturnToMenu(opts) {
   $('shoot-btn').classList.remove('show');
   $('hud').style.display        = 'none';
   $('diff-badge').style.display = 'none';
-  comboPill.classList.remove('show');
+  comboPill.classList.remove('show', 'level-up');
+  comboPill.removeAttribute('data-mult');
   playerEl.style.display        = 'none';
   playerEl.style.transition     = 'none';
   playerEl.style.filter         = '';
+  /* Tear down motion-blur state so the menu never inherits a dusty
+     speed-tier or a lingering blur on the player icon. */
+  document.body.classList.remove('play-blur');
+  document.body.style.setProperty('--speed-tier', '0');
+  document.body.style.setProperty('--vel-blur', '0px');
+  _lastSpeedTier = undefined;
+  _lastVelBlur = 0;
 
   $('bg-base').style.display  = 'none';
   $('bg-over').style.display  = 'none';
@@ -1639,11 +1983,78 @@ function clearCountdown() {
   const flash = $('cd-flash');
   if (flash) { flash.classList.remove('pulse', 'pulse-go'); }
   document.body.classList.remove('cd-active');
+  /* Also tear down the control-hint if a new countdown overrides an
+     older one (restart, difficulty change, exit). Immediate clear so the
+     fade-out doesn't linger on top of the new countdown. */
+  if (typeof hidePlayHint === 'function') hidePlayHint(true);
   /* Clear any shake on the world layers — NEVER on <body>, since a
      transformed body re-anchors every fixed child and jitters the UI. */
   bgBase && bgBase.classList.remove('cd-shake');
   bgOver && bgOver.classList.remove('cd-shake');
 }
+/* Device-aware control hint shown throughout the countdown so a first-time
+   player knows what to do the moment "Go!" fires. Auto-detects primary
+   input: coarse pointer → touch copy, fine pointer → mouse copy. Gets
+   torn down by clearCountdown() so it never leaks into the game or the
+   game-over screen. */
+let _playHintTimers = [];
+function clearPlayHintTimers() {
+  _playHintTimers.forEach(t => clearTimeout(t));
+  _playHintTimers = [];
+}
+function hidePlayHint(immediate) {
+  const ph = $('play-hint');
+  if (!ph) return;
+  clearPlayHintTimers();
+  if (immediate) {
+    ph.classList.remove('show', 'hide');
+    ph.innerHTML = '';
+    return;
+  }
+  if (!ph.classList.contains('show')) return;
+  ph.classList.remove('show');
+  ph.classList.add('hide');
+  _playHintTimers.push(setTimeout(() => {
+    ph.classList.remove('hide');
+    ph.innerHTML = '';
+  }, 520));
+}
+function showPlayHint() {
+  const ph = $('play-hint');
+  if (!ph) return;
+  clearPlayHintTimers();
+  ph.classList.remove('show', 'hide');
+
+  /* Prefer the modern pointer/hover media queries. Fallback to touch API
+     for older browsers. If neither indicates touch, default to mouse. */
+  const mm = (typeof matchMedia === 'function') ? matchMedia : null;
+  const coarse = mm && mm('(hover: none) and (pointer: coarse)').matches;
+  const fine   = mm && mm('(hover: hover) and (pointer: fine)').matches;
+  const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+  const isTouch = coarse || (!fine && hasTouch);
+
+  /* Countdown hint now reflects what's actually possible at start:
+     you control the balloon with mouse/finger and dodge helicopters.
+     Shooting is only available AFTER picking up firepower — telling the
+     player to "click to shoot" at countdown is misleading because nothing
+     would happen until a fire pickup spawns. */
+  const icon = isTouch ? '👆' : '🖱️';
+  const lead = isTouch ? 'Finger über den Screen bewegen' : 'Maus bewegen zum Steuern';
+  const action = 'Helikoptern ausweichen';
+
+  ph.innerHTML = `
+    <span class="ph-icon" aria-hidden="true">${icon}</span>
+    <span class="ph-text">
+      <span class="ph-lead">${lead}</span>
+      <span class="ph-sep">·</span>
+      <span class="ph-action">${action}</span>
+    </span>`;
+
+  /* Double-rAF so the initial (hidden) state commits before we flip to
+     .show — guarantees the opacity+transform transition actually plays. */
+  requestAnimationFrame(() => requestAnimationFrame(() => ph.classList.add('show')));
+}
+
 function runCountdown() {
   const el = $('countdown');
   const flash = $('cd-flash');
@@ -1651,6 +2062,10 @@ function runCountdown() {
   clearCountdown();
   el.classList.add('show');
   document.body.classList.add('cd-active');
+  /* Intro hint — visible during "3 · 2 · 1", fades out as "Go!" slams in so
+     attention shifts cleanly to gameplay. */
+  showPlayHint();
+  _playHintTimers.push(setTimeout(() => hidePlayHint(), COUNTDOWN_STEP_MS * 3 - 120));
 
   const beat = (html, cls, isGo) => {
     /* Replace the inner node — re-triggers the slam animation from scratch */
@@ -1724,17 +2139,25 @@ function restartGame() {
   pvx = pvy = 0;
   stx = px; sty = py;
   _glowBand = -1;
+  /* Reset speed/motion-blur CSS vars so the first frame writes fresh
+     and no leftover blur/vignette tier carries over from a prior run. */
+  _lastSpeedTier = undefined;
+  _lastVelBlur = 0;
+  document.body.classList.remove('play-blur');
+  document.body.style.setProperty('--speed-tier', '0');
+  document.body.style.setProperty('--vel-blur', '0px');
   pauseOverlay.classList.remove('show');
   pauseBtn.classList.remove('paused');
   pauseBtn.textContent = '❚❚';
 
   scorePill.textContent = 'Score: 0';
-  comboPill.classList.remove('show');
+  comboPill.classList.remove('show', 'level-up');
+  comboPill.removeAttribute('data-mult');
   gameoverEl.classList.remove('show');
   diffBadge.classList.remove('show');
   bestPill.textContent  = `Best: ${getHs(selectedDiff)}`;
 
-  playerIcon.style.backgroundImage = "url('gif_bg.webp?v=2')";
+  playerIcon.style.backgroundImage = "url('balloon.webp?v=1')";
   /* Flush the falling transition before applying the new transform —
      otherwise the browser tweens from crash-pos to centre on restart. */
   playerEl.style.transition = 'none';
@@ -1759,25 +2182,13 @@ function restartGame() {
   document.body.classList.remove('slowmo-active');
   parts.length = 0;
   vfxCtx.clearRect(0, 0, vfx.width, vfx.height);
-  document.querySelectorAll('img[src^="fire.gif"], img[src^="kon.gif"], img[src^="explosion.gif"]')
+  document.querySelectorAll('img[src^="fire.gif"], img[src^="confetti.gif"], img[src^="explosion.gif"]')
     .forEach(e => e.remove());
   document.querySelectorAll('.bonus').forEach(e => e.remove());
 
   runCountdown();
   startLoop();
 }
-
-/* ═══════════════════════════════════════════════════════════════════
-   HOME SCREEN — slow video playback (cinematic)
-═══════════════════════════════════════════════════════════════════ */
-(() => {
-  const v = document.querySelector('#start-bg video');
-  if (!v) return;
-  const apply = () => { try { v.playbackRate = 0.45; } catch {} };
-  apply();
-  v.addEventListener('play', apply);
-  v.addEventListener('loadedmetadata', apply);
-})();
 
 /* ═══════════════════════════════════════════════════════════════════
    SECRET 5-TAP UNLOCK — tap the → chevron 5× fast to unlock portfolio
