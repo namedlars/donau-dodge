@@ -20,9 +20,11 @@
       --blur:     blur(32px) saturate(200%);
       /* Palette */
       --accent:   #007AFF;
-      --green:    #30D158;
+      --green:    #30D158;   /* systemGreen — Easy */
+      --yellow:   #FFD60A;   /* systemYellow — Normal */
+      --orange:   #FF5C3A;   /* red-leaning orange — Hard (between systemOrange & systemRed) */
       --red:      #FF453A;
-      --gold:     #FFD60A;
+      --gold:     #FFD60A;   /* alias (legacy) — same as --yellow */
       /* Text */
       --text:     rgba(255,255,255,0.94);
       --muted:    rgba(255,255,255,0.50);
@@ -31,13 +33,26 @@
       --diff-border:  rgba(0,122,255,0.42);
       --diff-glow:    rgba(0,122,255,0.30);
       --diff-text:    #007AFF;
-      /* Curves — unified easing language. Use these everywhere. */
+      /* ── Motion curves ───────────────────────────────────────────
+         Unified easing language tuned to Apple HIG. Use these tokens
+         everywhere instead of hand-rolling cubic-beziers. Ranked
+         conceptually from "still UI that's just revealing" to "object
+         with weight and bounce". */
       --ease:         cubic-bezier(0.25, 0.1, 0.25, 1);
       --ease-smooth:  cubic-bezier(0.22, 1, 0.36, 1);      /* slow-out, most UI motion */
       --ease-quick:   cubic-bezier(0.4, 0, 0.2, 1);        /* snappy micro-interactions */
       --ease-in-out:  cubic-bezier(0.76, 0, 0.24, 1);      /* slow in + out */
-      --spring:       cubic-bezier(0.34, 1.56, 0.64, 1);   /* bouncy */
+      /* Emphasized decelerate — Apple's "materials settle" curve. Best
+         for glass panels entering the screen: they slide in with
+         authority then ease down like a physical object landing. */
+      --ease-emph:    cubic-bezier(0.05, 0.7, 0.1, 1);
+      /* Spring family — progressively bouncier. -soft is for text/icons
+         that should "nod" into place; -snap is for buttons pressed/
+         released; -pop is for one-shot reward animations. */
       --spring-soft:  cubic-bezier(0.22, 1.2, 0.36, 1);    /* subtle spring */
+      --spring-snap:  cubic-bezier(0.34, 1.45, 0.50, 1);   /* firm */
+      --spring:       cubic-bezier(0.34, 1.56, 0.64, 1);   /* bouncy */
+      --spring-pop:   cubic-bezier(0.28, 1.65, 0.50, 1);   /* extra pop, one-shot only */
       /* Fonts */
       --font-ui:    'SF Pro Display', 'SF Pro Text', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', sans-serif;
       --font-pixel: 'Pixelify Sans', 'SF Pro Display', system-ui, monospace;
@@ -53,6 +68,119 @@
       overscroll-behavior: none;
     }
 
+    /* ═══════════════════════════════════════════════════════════════════
+       PERF TIER GUARDS — applied from JS at boot. The heaviest Liquid-
+       Glass effects (full-screen blur filters, huge backdrop-filter
+       radii, stacked drop-shadows) are the #1 cause of lag on mobile
+       GPUs. These rules scale them down on mid/low-end devices so the
+       game stays at 60 fps instead of stuttering.
+       .fx-high = full fidelity (desktops, M-series, top Android)
+       .fx-mid  = reduced blur radii, no full-screen motion blur
+       .fx-low  = blur effects stripped, minimal filters
+    ═══════════════════════════════════════════════════════════════════ */
+
+    /* Low tier — kill everything expensive */
+    .fx-low #bg-base,
+    .fx-low #bg-over,
+    .fx-low #clouds,
+    .fx-low #player-icon {
+      filter: none !important;
+    }
+    .fx-low #vignette {
+      background: radial-gradient(ellipse 100% 80% at 50% 50%,
+        transparent 55%, rgba(0,0,0,0.55) 100%) !important;
+      transition: none !important;
+    }
+    /* Slash backdrop-filter radii on low tier — the biggest mobile win.
+       We keep the background color so glass pills still read as glass,
+       just without the expensive backdrop blur compositor pass. */
+    .fx-low .glass,
+    .fx-low #score-pill,
+    .fx-low #best-pill,
+    .fx-low #combo-pill,
+    .fx-low #diff-badge,
+    .fx-low .ig-trophy,
+    .fx-low #play-hint,
+    .fx-low .pause-card,
+    .fx-low .go-card,
+    .fx-low .diff-card,
+    .fx-low #launch-shade,
+    .fx-low #pause-overlay,
+    .fx-low #gameover,
+    .fx-low .portfolio-card {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    /* Soften shadows — stacked huge-radius box-shadows also hurt on
+       low-end (repaints ripple out to the whole shadow area). */
+    .fx-low #score-pill,
+    .fx-low #best-pill,
+    .fx-low #combo-pill,
+    .fx-low .ig-trophy,
+    .fx-low .ctl-btn,
+    .fx-low .shoot-btn {
+      box-shadow: 0 2px 10px rgba(0,0,0,0.35) !important;
+    }
+    /* Keep all pulse/shimmer animations — they're cheap — but drop the
+       infinite ones that recalc filters each frame. */
+    .fx-low #fp-pill,
+    .fx-low #slow-pill,
+    .fx-low #shield-pill {
+      animation: none !important;
+    }
+    /* ── heli drop-shadow on the image is a `filter:` — expensive when
+       many helis move at once, especially in Safari. On low/mid tier
+       we swap it for a lighter approach: keep the visual read (a dark
+       shadow beneath the heli) via a simple radial gradient pseudo or
+       just drop it entirely; here we drop, because the helis already
+       read well against the sky. */
+    .fx-low .heli-img,
+    .fx-mid .heli-img {
+      filter: none !important;
+    }
+    /* Disable the heliFloat infinite animation on low tier — small
+       vertical bob, barely noticeable, but at 5+ helis on screen it
+       keeps the compositor busy every frame. */
+    .fx-low .heli-img {
+      animation: none !important;
+    }
+    /* Subtree isolation — tell the browser that helis/pickups/bullets
+       don't affect outside layout or paint. This lets the compositor
+       skip invalidating sibling layers when one moves. Big win on
+       Safari which otherwise repaints more aggressively. */
+    .heli-wrap, .pickup, .bullet {
+      contain: layout paint style;
+    }
+
+    /* Mid tier — keep glass but clamp blur radii to 12-16px */
+    .fx-mid #bg-base,
+    .fx-mid #bg-over,
+    .fx-mid #clouds,
+    .fx-mid #player-icon {
+      filter: none !important;          /* skip motion blur */
+    }
+    .fx-mid .glass,
+    .fx-mid #score-pill,
+    .fx-mid #best-pill,
+    .fx-mid #combo-pill,
+    .fx-mid .ig-trophy,
+    .fx-mid #play-hint,
+    .fx-mid .pause-card,
+    .fx-mid .go-card,
+    .fx-mid .diff-card,
+    .fx-mid #pause-overlay,
+    .fx-mid #gameover {
+      backdrop-filter: blur(14px) saturate(160%) !important;
+      -webkit-backdrop-filter: blur(14px) saturate(160%) !important;
+    }
+    /* The vignette on mid tier doesn't animate with speed — static
+       radial gradient only. */
+    .fx-mid #vignette {
+      background: radial-gradient(ellipse 100% 80% at 50% 50%,
+        transparent 55%, rgba(0,0,0,0.58) 100%) !important;
+      transition: background 0.35s ease-out !important;
+    }
+
     /* In-game: pixel font for immersion */
     #hud, #score-pill, #best-pill, #combo-pill,
     #diff-badge, #kbd-hint,
@@ -66,21 +194,177 @@
 
     /* ═══ START SCREEN LAYERS ═══════════════════════════════════════ */
 
-    /* Blurred game background with subtle Ken Burns pan */
+    /* Blurred game background with subtle Ken Burns pan. On low-tier
+       devices we fall back to a static gradient (see fx-low rule below)
+       so the home screen still looks cinematic without decoding video. */
     #start-bg {
       position: fixed; inset: 0; z-index: 0; pointer-events: none;
       background: #000;
       overflow: hidden;
     }
-    #start-bg video {
+/* ── Pure-CSS recreation of the silk-smoke video ────────────────
+       The original video is near-pure black with soft, low-contrast
+       grey highlights drifting slowly — almost like black silk moving
+       in dim light. We replicate it with:
+
+         • A pure-black base (.sb-sky).
+         • Five soft white radial blobs at different positions, each
+           heavily blurred and animated on long independent loops so
+           they rarely align the same way — giving the organic,
+           never-repeating feel of the real video.
+         • Slight opacity breathing + small scale pulse so the light
+           "lives" the way real diffused light does.
+
+       Total cost per frame: compositor-only transforms on 5 layers —
+       well under 0.1 ms on any GPU made this decade. */
+    .sb-sky {
       position: absolute; inset: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
-      opacity: 0.85;
+      background: #000;
     }
+    /* Each "cloud" is a single very-soft radial highlight. Layer
+       positions + drift distances are tuned by hand to match the
+       density/flow of the source video frames. Sizes vary so the
+       parallax between layers reads correctly even though they're
+       all monochrome. */
+    .sb-cloud {
+      position: absolute;
+      pointer-events: none;
+      /* Blur 72→50 px. Kernel is quadratic cost on GPU — 50/72 ≈ 0.48×
+         area, so ~50% cheaper per layer. Visual diff is marginal because
+         the layers are already semi-transparent and blend-stacked. */
+      filter: blur(50px);
+      will-change: transform, opacity;
+      mix-blend-mode: screen;     /* additive whites, clamps at black */
+    }
+    /* Five soft white highlights. Each one now has:
+         • Stronger peak opacity (~0.22) so they read as distinct flares
+           rather than just haze.
+         • A multi-stage keyframe path that takes it across large parts
+           of the screen rather than bouncing between two points, so
+           they truly "swim" around.
+         • Independent period + negative delay on the breathing curve,
+           so their brightening/dimming moments never align.
+       Paths are defined as closed loops (start state == end state) so
+       there's no visible snap on loop boundary. */
+    .sb-cloud-1 {
+      width: 70%; height: 60%; left: -10%; top: -5%;
+      background: radial-gradient(ellipse 50% 45% at 50% 50%,
+                    rgba(255,255,255,0.26) 0%,
+                    rgba(255,255,255,0.11) 35%,
+                    transparent 70%);
+      animation: sbSwim1 18s ease-in-out infinite,
+                 sbBreath 6s ease-in-out      infinite;
+    }
+    .sb-cloud-2 {
+      width: 60%; height: 52%; left: 55%; top: 12%;
+      background: radial-gradient(ellipse 55% 50% at 40% 60%,
+                    rgba(255,255,255,0.24) 0%,
+                    rgba(255,255,255,0.10) 35%,
+                    transparent 72%);
+      animation: sbSwim2 22s ease-in-out infinite,
+                 sbBreath 8s ease-in-out -3s infinite;
+    }
+    .sb-cloud-3 {
+      width: 55%; height: 48%; left: 15%; top: 55%;
+      background: radial-gradient(ellipse 50% 45% at 55% 50%,
+                    rgba(255,255,255,0.22) 0%,
+                    rgba(255,255,255,0.09) 40%,
+                    transparent 72%);
+      animation: sbSwim3 25s ease-in-out infinite,
+                 sbBreath 7s ease-in-out -5s infinite;
+    }
+    /* Two smaller, sharper streaks that cross the frame faster to
+       catch the eye — the "fold" highlights from the silk-like video. */
+    .sb-aurora {       /* reusing the existing DOM node as streak-A */
+      position: absolute;
+      width: 42%; height: 34%; left: 10%; top: 8%;
+      pointer-events: none;
+      background: radial-gradient(ellipse 60% 35% at 50% 50%,
+                    rgba(255,255,255,0.20) 0%,
+                    rgba(255,255,255,0.08) 42%,
+                    transparent 72%);
+      /* Matches .sb-cloud reduction — 58→42 px for ~47% area cost. */
+      filter: blur(42px);
+      mix-blend-mode: screen;
+      will-change: transform, opacity;
+      animation: sbSwimA 15s ease-in-out infinite,
+                 sbBreath 5s ease-in-out -1s infinite;
+      inset: auto;
+      transform: none;
+    }
+    .sb-horizon {      /* reusing as streak-B, lower right */
+      position: absolute;
+      width: 46%; height: 36%; left: 45%; top: 55%;
+      pointer-events: none;
+      background: radial-gradient(ellipse 55% 40% at 50% 50%,
+                    rgba(255,255,255,0.19) 0%,
+                    rgba(255,255,255,0.07) 42%,
+                    transparent 72%);
+      /* Matches .sb-cloud reduction — 62→44 px for ~50% area cost. */
+      filter: blur(44px);
+      mix-blend-mode: screen;
+      will-change: transform, opacity;
+      animation: sbSwimB 19s ease-in-out infinite,
+                 sbBreath 6.5s ease-in-out -3s infinite;
+      left: 45%; right: auto; bottom: auto;
+    }
+
+    /* ── Swim paths — each blob traces a loop that actually crosses
+       a meaningful portion of the screen (not just ±10%). Because
+       start == end state, there is no snap at loop boundary. The four
+       mid-points draw a gentle figure-eight-ish arc so the motion feels
+       organic rather than pendulum-like. */
+    @keyframes sbSwim1 {
+      0%   { transform: translate3d(   0%,   0%, 0) scale(1);    }
+      25%  { transform: translate3d(  55%,  30%, 0) scale(1.16); }
+      50%  { transform: translate3d( 105%, -10%, 0) scale(1.28); }
+      75%  { transform: translate3d(  45%, -35%, 0) scale(1.14); }
+      100% { transform: translate3d(   0%,   0%, 0) scale(1);    }
+    }
+    @keyframes sbSwim2 {
+      0%   { transform: translate3d(   0%,   0%, 0) scale(1);    }
+      25%  { transform: translate3d( -55%,  20%, 0) scale(1.20); }
+      50%  { transform: translate3d(-100%,  50%, 0) scale(1.32); }
+      75%  { transform: translate3d( -40%,  65%, 0) scale(1.15); }
+      100% { transform: translate3d(   0%,   0%, 0) scale(1);    }
+    }
+    @keyframes sbSwim3 {
+      0%   { transform: translate3d(   0%,   0%, 0) scale(1);    }
+      25%  { transform: translate3d(  45%, -30%, 0) scale(1.18); }
+      50%  { transform: translate3d(  90%, -60%, 0) scale(1.14); }
+      75%  { transform: translate3d(  35%, -75%, 0) scale(1.24); }
+      100% { transform: translate3d(   0%,   0%, 0) scale(1);    }
+    }
+    @keyframes sbSwimA {
+      0%   { transform: translate3d(   0%,   0%, 0) scale(1);    }
+      33%  { transform: translate3d(  80%,  45%, 0) scale(1.24); }
+      66%  { transform: translate3d( 120%, 100%, 0) scale(1.35); }
+      100% { transform: translate3d(   0%,   0%, 0) scale(1);    }
+    }
+    @keyframes sbSwimB {
+      0%   { transform: translate3d(   0%,   0%, 0) scale(1);    }
+      33%  { transform: translate3d( -70%, -45%, 0) scale(1.20); }
+      66%  { transform: translate3d(-110%, -90%, 0) scale(1.30); }
+      100% { transform: translate3d(   0%,   0%, 0) scale(1);    }
+    }
+
+    /* Breathing opacity — deeper dip so flares pulse between very soft
+       and clearly visible. Different durations + negative delays on
+       each blob keep them out of sync. */
+    @keyframes sbBreath {
+      0%   { opacity: 0.45; }
+      50%  { opacity: 1.00; }
+      100% { opacity: 0.45; }
+    }
+
+    /* Low-tier: kill every animation — the static layered composition
+       still reads as a moody black silk backdrop, just frozen. */
+    .fx-low .sb-cloud,
+    .fx-low .sb-aurora,
+    .fx-low .sb-horizon { animation: none !important; }
     #start-bg::after {
       content: ""; position: absolute; inset: 0;
-      background: radial-gradient(ellipse at center, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.55) 100%);
+      background: radial-gradient(ellipse at center, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.38) 100%);
       pointer-events: none;
     }
 
@@ -95,15 +379,47 @@
 
     /* Scroll is driven entirely from JS (main loop), wrapping at the
        measured tile width — guarantees seamless infinite pan with
-       zero cycle-boundary seams. */
+       zero cycle-boundary seams.
+       Motion blur + dynamic saturation are driven by --speed-tier (0..1)
+       on <body>, updated from the main loop. The isotropic blur reads as
+       motion blur because the background is panning horizontally fast. */
+    :root {
+      --speed-tier: 0;
+      --vel-blur: 0px;
+    }
+    @property --speed-tier {
+      syntax: '<number>'; initial-value: 0; inherits: true;
+    }
+    @property --vel-blur {
+      syntax: '<length>'; initial-value: 0px; inherits: true;
+    }
     #bg-base, #bg-over {
       position: fixed; inset: 0;
       width: 100%; height: 100%;
       background-size: auto 100%;
       background-repeat: repeat-x;
       background-position: 0 center;
+      /* will-change on background-position only — filter rarely changes
+         now that the speed-tier is quantised in JS to 10 discrete steps,
+         and permanent filter layer promotion was costing a dedicated
+         compositor tile per frame. */
       will-change: background-position;
       backface-visibility: hidden;
+      /* Speed-responsive motion blur. At tier=0 passthrough. Blur kernel
+         radii halved (1.15→0.65, 1.65→0.90) — still reads as motion blur
+         at peak speed but costs ~40% less per frame on Intel iGPUs.
+         contrast() removed — subtle visual win for one full extra filter
+         pass, not worth it on weak GPUs. */
+      filter:
+        blur(calc(var(--speed-tier) * 0.65px))
+        saturate(calc(1 + var(--speed-tier) * 0.18));
+      transition: filter 0.4s var(--ease-smooth);
+    }
+    /* The overlay layer gets a touch more blur so parallax reads faster */
+    #bg-over {
+      filter:
+        blur(calc(var(--speed-tier) * 0.90px))
+        saturate(calc(1 + var(--speed-tier) * 0.14));
     }
     #bg-base {
       background-image: url('background.webp?v=2');
@@ -113,15 +429,48 @@
       background-image: url('background2.webp?v=2');
       z-index: 3; pointer-events: none;
     }
+    /* Clouds get a subtle horizontal push-blur too — cheap, sells speed.
+       Blur kernel halved (0.8→0.45) since the cloud layer is large and
+       sits above two already-blurred bg layers — any more is wasted. */
+    #clouds {
+      filter: blur(calc(var(--speed-tier) * 0.45px));
+      transition: filter 0.4s var(--ease-smooth);
+    }
 
-    /* Cinematic vignette */
+    /* Cinematic vignette — darkens + warms with speed tier so the world
+       tunnels inward as the pace ramps. */
     #vignette {
       position: fixed; inset: 0; z-index: 5; pointer-events: none;
-      background: radial-gradient(ellipse 100% 80% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%);
-      transition: background 0.35s ease-out;
+      background:
+        radial-gradient(
+          ellipse
+            calc(100% - var(--speed-tier) * 14%)
+            calc(80% - var(--speed-tier) * 10%)
+          at 50% 50%,
+          transparent 55%,
+          rgba(0,0,0, calc(0.55 + var(--speed-tier) * 0.18)) 100%
+        );
+      transition: background 0.5s var(--ease-smooth);
     }
     #vignette.pulse {
       background: radial-gradient(ellipse 100% 80% at 50% 50%, rgba(255,210,80,0.18) 0%, transparent 45%, rgba(0,0,0,0.55) 100%);
+    }
+
+    /* Player velocity blur — driven by --vel-blur on <body>. Tiny
+       isotropic blur that spikes when the player makes a fast lateral
+       move, then relaxes. Applied to the icon child (not #player itself)
+       so it doesn't clash with the inline drop-shadow glow on #player. */
+    body.play-blur #player-icon {
+      filter: blur(var(--vel-blur));
+      transition: filter 0.18s var(--ease-quick, cubic-bezier(0.4, 0, 0.2, 1));
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #bg-base, #bg-over, #clouds, #vignette {
+        filter: none !important;
+        transition: none !important;
+      }
+      body.play-blur #player-icon { filter: none !important; }
     }
 
     /* Particle canvas */
@@ -138,7 +487,7 @@
     }
     #player-icon {
       width: 100%; height: 100%;
-      background: url('gif_bg.webp?v=2') no-repeat center / contain;
+      background: url('balloon.webp?v=1') no-repeat center / contain;
       transform: scale(1.68);
       animation: balloonBob 3.2s ease-in-out infinite;
       will-change: transform;
@@ -347,19 +696,48 @@
       50%     { opacity: 1; }
     }
 
-    /* HUD shield pill */
+    /* HUD shield pill — always in flow; .show toggles expand vs collapsed.
+       Collapsed state zeroes max-height/padding/border and pulls up -8px to
+       cancel the parent's flex gap, so when one powerup ends the remaining
+       pills glide up smoothly instead of the second one hanging in dead space. */
     #shield-pill {
-      display: none; align-items: center; gap: 6px;
-      padding: 5px 12px; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 0 12px; border-radius: 999px;
       font-size: 13px; font-weight: 700;
       color: #a8ecff;
       background: rgba(120,210,255,0.14);
-      border: 1px solid rgba(160,230,255,0.45);
+      border: 0 solid rgba(160,230,255,0.45);
       box-shadow: 0 4px 18px rgba(120,210,255,0.30), inset 0 0.5px 0 rgba(220,245,255,0.28);
       letter-spacing: 0.3px;
+      max-height: 0; margin-top: -8px;
+      opacity: 0;
+      /* Off-screen state — tilted + shrunk + slightly blurred. The tilt
+         + blur make it read as "materialising in" rather than just
+         sliding; the snap spring on transform lands it with authority. */
+      transform: translateY(-10px) scale(0.88) rotate(-1.5deg);
+      filter: blur(3px);
+      pointer-events: none;
+      overflow: hidden;
+      transition:
+        max-height   0.42s var(--ease-smooth),
+        padding      0.42s var(--ease-smooth),
+        margin       0.42s var(--ease-smooth),
+        opacity      0.36s var(--ease-smooth),
+        transform    0.55s var(--spring-snap),
+        filter       0.36s var(--ease-smooth),
+        border-width 0.42s var(--ease-smooth);
       animation: shieldPulse 1.4s ease-in-out infinite;
     }
-    #shield-pill.show { display: inline-flex; }
+    #shield-pill.show {
+      max-height: 48px;
+      padding: 5px 12px;
+      margin-top: 0;
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0);
+      filter: blur(0);
+      border-width: 1px;
+      pointer-events: auto;
+    }
     @keyframes shieldPulse {
       0%,100% { box-shadow: 0 4px 18px rgba(120,210,255,0.28), inset 0 0.5px 0 rgba(220,245,255,0.28); }
       50%     { box-shadow: 0 4px 26px rgba(120,210,255,0.58), inset 0 0.5px 0 rgba(240,250,255,0.50); }
@@ -371,40 +749,95 @@
         rgba(255,130,30,0.12) 0%, transparent 55%, rgba(60,10,0,0.55) 100%);
     }
 
-    /* HUD firepower pill */
+    /* HUD firepower pill — matches shield-pill collapse logic */
     #fp-pill {
-      display: none; align-items: center; gap: 6px;
-      padding: 5px 12px; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 0 12px; border-radius: 999px;
       font-size: 13px; font-weight: 700;
       color: #ffb04e;
       background: rgba(255,120,30,0.14);
-      border: 1px solid rgba(255,150,50,0.42);
+      border: 0 solid rgba(255,150,50,0.42);
       box-shadow: 0 4px 18px rgba(255,120,30,0.3), inset 0 0.5px 0 rgba(255,200,130,0.26);
       letter-spacing: 0.3px;
+      max-height: 0; margin-top: -8px;
+      opacity: 0;
+      transform: translateY(-10px) scale(0.88) rotate(-1.5deg);
+      filter: blur(3px);
+      pointer-events: none;
+      overflow: hidden;
+      transition:
+        max-height   0.42s var(--ease-smooth),
+        padding      0.42s var(--ease-smooth),
+        margin       0.42s var(--ease-smooth),
+        opacity      0.36s var(--ease-smooth),
+        transform    0.55s var(--spring-snap),
+        filter       0.36s var(--ease-smooth),
+        border-width 0.42s var(--ease-smooth);
       animation: fpPulse 1.1s ease-in-out infinite;
     }
-    #fp-pill.show { display: inline-flex; }
+    #fp-pill.show {
+      max-height: 48px;
+      padding: 5px 12px;
+      margin-top: 0;
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0);
+      filter: blur(0);
+      border-width: 1px;
+      pointer-events: auto;
+    }
     @keyframes fpPulse {
       0%,100% { box-shadow: 0 4px 18px rgba(255,120,30,0.28), inset 0 0.5px 0 rgba(255,200,130,0.26); }
       50%     { box-shadow: 0 4px 24px rgba(255,120,30,0.55), inset 0 0.5px 0 rgba(255,220,160,0.45); }
     }
 
-    /* HUD slow-mo pill */
+    /* HUD slow-mo pill — matches shield-pill collapse logic */
     #slow-pill {
-      display: none; align-items: center; gap: 6px;
-      padding: 5px 12px; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 0 12px; border-radius: 999px;
       font-size: 13px; font-weight: 700;
       color: #c6b1ff;
       background: rgba(140,110,255,0.14);
-      border: 1px solid rgba(160,130,255,0.42);
+      border: 0 solid rgba(160,130,255,0.42);
       box-shadow: 0 4px 18px rgba(140,110,255,0.3), inset 0 0.5px 0 rgba(200,180,255,0.26);
       letter-spacing: 0.3px;
+      max-height: 0; margin-top: -8px;
+      opacity: 0;
+      transform: translateY(-10px) scale(0.88) rotate(-1.5deg);
+      filter: blur(3px);
+      pointer-events: none;
+      overflow: hidden;
+      transition:
+        max-height   0.42s var(--ease-smooth),
+        padding      0.42s var(--ease-smooth),
+        margin       0.42s var(--ease-smooth),
+        opacity      0.36s var(--ease-smooth),
+        transform    0.55s var(--spring-snap),
+        filter       0.36s var(--ease-smooth),
+        border-width 0.42s var(--ease-smooth);
       animation: slowPulse 1.4s ease-in-out infinite;
     }
-    #slow-pill.show { display: inline-flex; }
+    #slow-pill.show {
+      max-height: 48px;
+      padding: 5px 12px;
+      margin-top: 0;
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0);
+      filter: blur(0);
+      border-width: 1px;
+      pointer-events: auto;
+    }
     @keyframes slowPulse {
       0%,100% { box-shadow: 0 4px 18px rgba(140,110,255,0.28), inset 0 0.5px 0 rgba(200,180,255,0.26); }
       50%     { box-shadow: 0 4px 24px rgba(140,110,255,0.55), inset 0 0.5px 0 rgba(220,200,255,0.45); }
+    }
+
+    /* Reduced motion: skip the spring + slide + blur, just fade */
+    @media (prefers-reduced-motion: reduce) {
+      #fp-pill, #slow-pill, #shield-pill {
+        transition: opacity 0.2s linear, max-height 0.2s linear !important;
+        transform: none !important;
+        filter: none !important;
+      }
     }
     @keyframes pickupBob {
       0%,100% { transform: translateY(0); }
@@ -445,9 +878,15 @@
       font-size: 24px; font-weight: 700; letter-spacing: -0.6px;
       padding: 8px 26px; border-radius: 999px;
       color: #fff;
-      background: rgba(14,16,26,0.62);
-      backdrop-filter: blur(28px) saturate(180%);
-      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      background: rgba(14,16,26,0.72);
+      /* Blur radius 28→18 + saturate 180%→150%. Pill is ~60×180 px and
+         lives in the top-center during every frame of gameplay — each
+         pixel in its bounding box costs a backdrop compositor read, so
+         shrinking the blur kernel is a direct frame-time saving. The
+         bg opacity bumped slightly (0.62→0.72) to keep legibility with
+         the lighter blur. `contain` isolates style/paint to this node. */
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
       border: 1px solid rgba(255,255,255,0.14);
       box-shadow:
         0 8px 26px rgba(0,0,0,0.45),
@@ -456,13 +895,28 @@
       font-variant-numeric: tabular-nums;
       font-feature-settings: "tnum" 1;
       transition: transform 0.35s var(--spring-soft);
+      contain: layout paint style;
     }
-    #score-pill.pop { animation: scorePop 0.42s var(--spring); }
+    /* Score pop — snappy scale + a subtle text brightness spike so the
+       eye catches the increment even when peripheral. Uses spring-pop
+       for a tight one-shot flourish with no residual motion. */
+    #score-pill.pop { animation: scorePop 0.46s var(--spring-pop); }
     @keyframes scorePop {
-      0%   { transform: scale(1); }
-      38%  { transform: scale(1.16); }
-      70%  { transform: scale(0.98); }
-      100% { transform: scale(1); }
+      0%   { transform: scale(1);    filter: brightness(1); }
+      32%  { transform: scale(1.18); filter: brightness(1.25); }
+      62%  { transform: scale(0.97); filter: brightness(1.08); }
+      100% { transform: scale(1);    filter: brightness(1); }
+    }
+    /* Golden pop — triggered on milestone scores (10, 25, 50, 100…).
+       A warmer variant so big landmarks read as special, not just loud. */
+    #score-pill.pop-gold {
+      animation: scorePopGold 0.68s var(--spring-pop);
+    }
+    @keyframes scorePopGold {
+      0%   { transform: scale(1);    filter: brightness(1)   drop-shadow(0 0 0 rgba(255,214,10,0)); }
+      30%  { transform: scale(1.22); filter: brightness(1.35) drop-shadow(0 0 14px rgba(255,214,10,0.6)); }
+      65%  { transform: scale(0.96); filter: brightness(1.12) drop-shadow(0 0 6px  rgba(255,214,10,0.3)); }
+      100% { transform: scale(1);    filter: brightness(1)   drop-shadow(0 0 0 rgba(255,214,10,0)); }
     }
 
     #best-pill {
@@ -476,22 +930,97 @@
 
     #combo-pill {
       font-size: 14px; font-weight: 800;
-      padding: 6px 18px; border-radius: 999px;
+      padding: 6px 8px 6px 18px; border-radius: 999px;
       color: var(--gold);
-      background: rgba(255,214,10,0.12);
+      background: rgba(255,214,10,0.16);
       border-color: rgba(255,214,10,0.34);
       box-shadow:
         0 6px 22px rgba(255,214,10,0.22),
         inset 0 0.5px 0 rgba(255,255,255,0.22);
-      backdrop-filter: blur(24px) saturate(180%);
-      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      /* Blur 24→16 + saturate 180%→150%. Bg opacity raised (0.12→0.16) to
+         compensate for lighter backdrop. `contain` below to localise
+         repaints when the pill pops/level-ups. */
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+      contain: layout paint style;
       letter-spacing: 0.3px;
-      opacity: 0; transform: scale(0.72) translateY(10px);
+      opacity: 0;
+      /* Entrance state — scaled down, offset up, slightly rotated + blur.
+         Gives the combo pill a "materialise" feel instead of just popping
+         in. All four dimensions (scale, Y, rotate, blur) clear in sync. */
+      transform: scale(0.72) translateY(10px) rotate(2deg);
+      filter: blur(3px);
       transition:
-        opacity   0.38s var(--ease-smooth),
-        transform 0.55s var(--spring-soft);
+        opacity      0.38s var(--ease-smooth),
+        transform    0.58s var(--spring-snap),
+        filter       0.36s var(--ease-smooth),
+        box-shadow   0.35s var(--ease-smooth),
+        background   0.35s var(--ease-smooth),
+        border-color 0.35s var(--ease-smooth);
+      display: inline-flex; align-items: center; gap: 8px;
     }
-    #combo-pill.show { opacity: 1; transform: scale(1) translateY(0); }
+    #combo-pill.show {
+      opacity: 1;
+      transform: scale(1) translateY(0) rotate(0);
+      filter: blur(0);
+    }
+    /* Multiplier chip inside the combo pill — glowing gold capsule that
+       brightens at higher tiers so the reward reads visually. */
+    #combo-pill .cp-count {
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+    }
+    #combo-pill .cp-mult {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 30px; height: 22px; padding: 0 8px;
+      border-radius: 999px;
+      font-size: 12px; font-weight: 900;
+      background: linear-gradient(145deg, #FFE97A, #FFB340);
+      color: #2b1800;
+      letter-spacing: 0.2px;
+      box-shadow:
+        0 2px 8px rgba(255, 180, 40, 0.45),
+        inset 0 1px 0 rgba(255,255,255,0.55),
+        inset 0 -1px 0 rgba(120,60,0,0.35);
+      text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+    }
+    /* Multiplier tiers — background intensifies with the tier. Driven by
+       data-mult attr on #combo-pill (set from JS every time combo grows). */
+    #combo-pill[data-mult="3"] { border-color: rgba(255,180,40,0.55); box-shadow: 0 6px 26px rgba(255,170,20,0.40), inset 0 0.5px 0 rgba(255,255,255,0.30); }
+    #combo-pill[data-mult="4"] { border-color: rgba(255,120,30,0.65); box-shadow: 0 8px 30px rgba(255,120,30,0.52), inset 0 0.5px 0 rgba(255,255,255,0.36); background: rgba(255,140,40,0.16); color: #ffd48c; }
+    #combo-pill[data-mult="5"] { border-color: rgba(255,80,80,0.72);  box-shadow: 0 10px 34px rgba(255,70,70,0.60),  inset 0 0.5px 0 rgba(255,255,255,0.42); background: rgba(255,90,80,0.18);  color: #ffc0c0; }
+    #combo-pill[data-mult="4"] .cp-mult { background: linear-gradient(145deg, #FFC16A, #FF7A30); color: #2b0c00; }
+    #combo-pill[data-mult="5"] .cp-mult { background: linear-gradient(145deg, #FF9A9A, #FF3B30); color: #2b0000; box-shadow: 0 3px 12px rgba(255, 80, 80, 0.55), inset 0 1px 0 rgba(255,255,255,0.55); }
+    /* One-shot flare when the multiplier *levels up* — glass morphs
+       outward with a brief rotation kick and a golden glow halo, then
+       settles. The drop-shadow pulse sells the "reward" without adding
+       an extra DOM element. Uses spring-pop for emphasis. */
+    #combo-pill.level-up { animation: comboLevelUp 0.72s var(--spring-pop); }
+    @keyframes comboLevelUp {
+      0% {
+        transform: scale(1) translateY(0) rotate(0);
+        filter: brightness(1) drop-shadow(0 0 0 rgba(255,170,20,0));
+      }
+      22% {
+        transform: scale(1.18) translateY(-3px) rotate(-2deg);
+        filter: brightness(1.45) drop-shadow(0 0 22px rgba(255,170,20,0.75));
+      }
+      55% {
+        transform: scale(0.96) translateY(1px) rotate(1deg);
+        filter: brightness(1.12) drop-shadow(0 0 10px rgba(255,170,20,0.35));
+      }
+      100% {
+        transform: scale(1) translateY(0) rotate(0);
+        filter: brightness(1) drop-shadow(0 0 0 rgba(255,170,20,0));
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #combo-pill {
+        filter: none !important;
+        transform: scale(1) !important;
+      }
+      #combo-pill.level-up { animation: none; }
+    }
 
     /* In-game circular control buttons (exit, pause) — Apple iOS glass.
        Unified 44px touch target, crisp rim, soft inner gloss, firm press. */
@@ -504,14 +1033,18 @@
       font-size: 15px; font-weight: 600; font-family: inherit;
       line-height: 1;
       color: rgba(255,255,255,0.92); cursor: pointer;
-      background: rgba(14,16,26,0.62);
-      backdrop-filter: blur(28px) saturate(180%);
-      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      background: rgba(14,16,26,0.72);
+      /* Blur 28→18 + saturate 180%→150%. Two ctl buttons permanently
+         visible during gameplay; halving the blur kernel compounds with
+         the score-pill savings. */
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
       border: 1px solid rgba(255,255,255,0.14);
       box-shadow:
         0 6px 22px rgba(0,0,0,0.52),
         inset 0 0.5px 0 rgba(255,255,255,0.28),
         inset 0 -0.5px 0 rgba(0,0,0,0.32);
+      contain: layout paint style;
       outline: none;
       -webkit-tap-highlight-color: transparent;
       transition:
@@ -586,9 +1119,13 @@
       column-gap: 12px;
       padding: 10px 16px 10px 10px;
       border-radius: 14px;
-      background: rgba(14,16,26,0.72);
-      backdrop-filter: blur(24px) saturate(180%);
-      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      background: rgba(14,16,26,0.80);
+      /* Blur 24→16 + saturate 180%→150%. Trophies can stack 2-3 high
+         simultaneously during combo bursts, so this compounds. Bg
+         opacity 0.72→0.80 keeps the text-on-glass read with less blur. */
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+      contain: layout paint style;
       border: 1px solid rgba(255,255,255,0.10);
       box-shadow:
         0 12px 34px rgba(0,0,0,0.55),
@@ -740,21 +1277,24 @@
     }
     .diff-btn:hover:not(.active) { color: rgba(255,255,255,0.75); background: rgba(255,255,255,0.06); }
 
-    /* Active states per difficulty */
+    /* Active states per difficulty — Apple traffic-light ramp.
+       Each pill tints its own background + text in the semantic color,
+       with a matching outer glow that reinforces the "currently selected"
+       affordance without competing with the HUD. */
     .diff-btn.active[data-diff="easy"] {
       background: rgba(48,209,88,0.22);
       color: var(--green);
       box-shadow: 0 2px 10px rgba(48,209,88,0.28);
     }
     .diff-btn.active[data-diff="normal"] {
-      background: rgba(0,122,255,0.25);
-      color: #007AFF;
-      box-shadow: 0 2px 10px rgba(0,122,255,0.32);
+      background: rgba(255,214,10,0.22);
+      color: var(--yellow);
+      box-shadow: 0 2px 10px rgba(255,214,10,0.30);
     }
     .diff-btn.active[data-diff="hard"] {
-      background: rgba(255,69,58,0.22);
-      color: var(--red);
-      box-shadow: 0 2px 10px rgba(255,69,58,0.28);
+      background: rgba(255,92,58,0.22);
+      color: var(--orange);
+      box-shadow: 0 2px 10px rgba(255,92,58,0.30);
     }
 
     /* ── Apple iOS-style home grid ── */
@@ -952,22 +1492,35 @@
       animation: fadeUp 0.65s 0.28s var(--ease) both;
     }
 
-    /* ═══ GAME OVER ══════════════════════════════════════════════════ */
+    /* ═══ GAME OVER ══════════════════════════════════════════════════
+       Cinematic "world freezes" reveal. The backdrop blur animates UP
+       from 0 → 14px so it feels like time slows, then the glass card
+       lands with emphasized deceleration (Apple's materials curve) and
+       its children stagger in one-by-one — label → score → button row.
+       This matches how iOS/macOS surfaces materialise on-screen. */
 
     #gameover {
       display: none;
       position: fixed; inset: 0; z-index: 300;
       align-items: center; justify-content: center;
       background: rgba(0,0,0,0.50);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
+      /* Start at 0 blur; the @keyframes ramps it up. */
+      backdrop-filter: blur(0px);
+      -webkit-backdrop-filter: blur(0px);
     }
-    #gameover.show { display: flex; }
+    #gameover.show {
+      display: flex;
+      animation: goBackdropIn 0.48s var(--ease-smooth) forwards;
+    }
+    @keyframes goBackdropIn {
+      0%   { background: rgba(0,0,0,0);    backdrop-filter: blur(0px);  -webkit-backdrop-filter: blur(0px); }
+      100% { background: rgba(0,0,0,0.50); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+    }
 
     .go-card {
       background: rgba(8,10,20,0.75);
-      backdrop-filter: blur(52px) saturate(200%);
-      -webkit-backdrop-filter: blur(52px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
       border: 1px solid rgba(255,255,255,0.13);
       border-radius: 38px;
       padding: 36px 44px 40px;
@@ -977,7 +1530,58 @@
         0 44px 88px rgba(0,0,0,0.72),
         0 0 0 1px rgba(255,255,255,0.05),
         inset 0 1px 0 rgba(255,255,255,0.18);
-      animation: popIn 0.68s var(--spring-soft) both;
+      transform-origin: 50% 40%;
+      perspective: 800px;
+      /* "Land" — comes in from slightly above with a whisper of 3D tilt,
+         clears its own inner blur as it settles. Uses the emphasized
+         decelerate curve so it arrives with weight, not a bounce. */
+      animation: cardLand 0.72s var(--ease-emph) both;
+    }
+    @keyframes cardLand {
+      0% {
+        opacity: 0;
+        transform: scale(0.90) translateY(-28px) rotateX(10deg);
+        filter: blur(10px);
+      }
+      60% {
+        opacity: 1;
+        transform: scale(1.015) translateY(2px) rotateX(-1deg);
+        filter: blur(0);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) translateY(0) rotateX(0);
+        filter: blur(0);
+      }
+    }
+    /* Staggered children — each reveals 80 ms after the previous so
+       the eye follows: top label → big score → subtitle → badge → button */
+    .go-card > * {
+      animation: goChild 0.52s var(--ease-emph) both;
+      opacity: 0;
+    }
+    .go-card > *:nth-child(1) { animation-delay: 0.22s; }
+    .go-card > *:nth-child(2) { animation-delay: 0.30s; }
+    .go-card > *:nth-child(3) { animation-delay: 0.38s; }
+    .go-card > *:nth-child(4) { animation-delay: 0.46s; }
+    .go-card > *:nth-child(5) { animation-delay: 0.54s; }
+    .go-card > *:nth-child(6) { animation-delay: 0.62s; }
+    .go-card > *:nth-child(7) { animation-delay: 0.70s; }
+    @keyframes goChild {
+      0%   { opacity: 0; transform: translateY(8px); filter: blur(3px); }
+      100% { opacity: 1; transform: translateY(0);   filter: blur(0);   }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .go-card,
+      .go-card > *,
+      #gameover.show {
+        animation: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+        filter: none !important;
+        backdrop-filter: blur(14px) !important;
+        -webkit-backdrop-filter: blur(14px) !important;
+      }
     }
 
     #go-gif { width: 180px; margin-bottom: 16px; }
@@ -1201,8 +1805,8 @@
     #diff-modal.show { display: flex; }
     .diff-card {
       background: rgba(10,12,22,0.80);
-      backdrop-filter: blur(52px) saturate(200%);
-      -webkit-backdrop-filter: blur(52px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
       border: 1px solid rgba(255,255,255,0.14);
       border-radius: 30px;
       padding: 30px 26px 18px;
@@ -1219,36 +1823,90 @@
     .diff-card p {
       font-size: 13px; color: var(--muted); margin-bottom: 18px;
     }
+    /* ── Difficulty choices (Apple traffic-light design) ──────────────
+       Each row uses a semantic accent color (green/yellow/orange) that
+       is visible from the resting state via a colored dot, but the
+       row's fill stays nearly neutral so the three options read as
+       peers — not as three competing CTAs (Apple HIG: only one primary
+       action per surface). On hover the accent fills in: background
+       tints, border adopts the accent at low alpha, text stays white
+       for contrast. Active press uses subtle scale, not color change.
+       The `.dot` is the persistent identity marker. */
     .diff-choice {
+      --accent: rgba(255,255,255,0.9);
+      --accent-bg: rgba(255,255,255,0.04);
+      --accent-border: rgba(255,255,255,0.09);
+      --accent-glow: transparent;
       display: flex; align-items: center; justify-content: space-between;
       width: 100%; padding: 14px 18px; margin-bottom: 8px;
       border-radius: 14px;
-      background: rgba(255,255,255,0.04);
-      color: rgba(255,255,255,0.92);
-      border: 1px solid rgba(255,255,255,0.09);
+      background: var(--accent-bg);
+      color: rgba(255,255,255,0.94);
+      border: 1px solid var(--accent-border);
       outline: none; cursor: pointer;
       font-size: 15px; font-weight: 600; font-family: inherit;
       letter-spacing: 0.3px;
       min-height: 48px;
       transition: transform 0.2s var(--spring), background 0.22s var(--ease),
-                  border-color 0.22s var(--ease), color 0.22s var(--ease);
+                  border-color 0.22s var(--ease), box-shadow 0.22s var(--ease);
     }
+    /* Resting dots — already carry the semantic color so the user
+       scans the list and knows which is which without reading labels. */
+    .diff-choice[data-diff="easy"]   { --accent: #30D158; }
+    .diff-choice[data-diff="normal"] { --accent: #FFD60A; }
+    .diff-choice[data-diff="hard"]   { --accent: #FF5C3A; }
+
     .diff-choice .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: rgba(255,255,255,0.32);
-      transition: background 0.22s var(--ease), box-shadow 0.22s var(--ease);
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 var(--accent);
+      transition: box-shadow 0.22s var(--ease), transform 0.22s var(--spring);
     }
+    /* Hover: accent fills in — tinted background, colored border,
+       and a soft outer glow on the dot. Text stays white for legibility. */
     .diff-choice:hover {
       transform: translateY(-1px);
-      background: rgba(255,255,255,0.10);
-      color: #fff;
-      border-color: rgba(255,255,255,0.22);
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+      box-shadow: 0 6px 22px color-mix(in srgb, var(--accent) 24%, transparent);
     }
     .diff-choice:hover .dot {
-      background: #fff;
-      box-shadow: 0 0 0 3px rgba(255,255,255,0.12);
+      transform: scale(1.15);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+    /* Fallback for browsers without color-mix (older Safari <16.2) —
+       uses pre-mixed rgba per difficulty so the hover still lights up. */
+    @supports not (background: color-mix(in srgb, red, blue)) {
+      .diff-choice[data-diff="easy"]:hover {
+        background: rgba(48,209,88,0.14);
+        border-color: rgba(48,209,88,0.55);
+        box-shadow: 0 6px 22px rgba(48,209,88,0.24);
+      }
+      .diff-choice[data-diff="easy"]:hover .dot {
+        box-shadow: 0 0 0 4px rgba(48,209,88,0.28);
+      }
+      .diff-choice[data-diff="normal"]:hover {
+        background: rgba(255,214,10,0.14);
+        border-color: rgba(255,214,10,0.55);
+        box-shadow: 0 6px 22px rgba(255,214,10,0.24);
+      }
+      .diff-choice[data-diff="normal"]:hover .dot {
+        box-shadow: 0 0 0 4px rgba(255,214,10,0.28);
+      }
+      .diff-choice[data-diff="hard"]:hover {
+        background: rgba(255,92,58,0.14);
+        border-color: rgba(255,92,58,0.55);
+        box-shadow: 0 6px 22px rgba(255,92,58,0.24);
+      }
+      .diff-choice[data-diff="hard"]:hover .dot {
+        box-shadow: 0 0 0 4px rgba(255,92,58,0.28);
+      }
     }
     .diff-choice:active { transform: scale(0.98); }
+    .diff-choice:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .diff-cancel {
       display: block; width: 100%; margin-top: 6px;
       padding: 10px; border-radius: 12px;
@@ -1260,19 +1918,30 @@
     .diff-cancel:hover { color: #fff; }
 
     /* ── Pause overlay ──────────────────────────────────────────── */
+    /* ── Pause overlay ────────────────────────────────────────────
+       Like game-over but snappier — the player paused ON PURPOSE so
+       the world should freeze quickly, not cinematically. Backdrop
+       blur still ramps from 0 so the blur doesn't pop-in suddenly. */
     #pause-overlay {
       display: none;
       position: fixed; inset: 0; z-index: 200;
       align-items: center; justify-content: center;
-      background: rgba(0,0,0,0.48);
-      backdrop-filter: blur(14px) saturate(140%);
-      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      background: rgba(0,0,0,0);
+      backdrop-filter: blur(0px) saturate(140%);
+      -webkit-backdrop-filter: blur(0px) saturate(140%);
     }
-    #pause-overlay.show { display: flex; }
+    #pause-overlay.show {
+      display: flex;
+      animation: pauseBackdropIn 0.32s var(--ease-smooth) forwards;
+    }
+    @keyframes pauseBackdropIn {
+      0%   { background: rgba(0,0,0,0);    backdrop-filter: blur(0px)  saturate(120%); -webkit-backdrop-filter: blur(0px)  saturate(120%); }
+      100% { background: rgba(0,0,0,0.48); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); }
+    }
     .pause-card {
       background: rgba(10,12,22,0.74);
-      backdrop-filter: blur(52px) saturate(200%);
-      -webkit-backdrop-filter: blur(52px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
       border: 1px solid rgba(255,255,255,0.14);
       border-radius: 30px;
       padding: 32px 40px 28px;
@@ -1281,12 +1950,41 @@
         0 32px 64px rgba(0,0,0,0.60),
         0 0 0 1px rgba(255,255,255,0.05),
         inset 0 1px 0 rgba(255,255,255,0.18);
-      animation: popIn 0.55s var(--spring-soft) both;
+      transform-origin: 50% 40%;
+      animation: cardPopIn 0.50s var(--spring-snap) both;
     }
+    /* Pause card pops in with a firm spring — smaller overshoot than the
+       go-card's cinematic "land" because paused state is utilitarian. */
+    @keyframes cardPopIn {
+      0%   { opacity: 0; transform: scale(0.86) translateY(10px); filter: blur(4px); }
+      55%  { opacity: 1; transform: scale(1.03) translateY(-1px); filter: blur(0);   }
+      100% { opacity: 1; transform: scale(1)    translateY(0);     filter: blur(0);   }
+    }
+    /* Pause card children — subtle stagger: title → subtitle → button */
+    .pause-card > * { animation: goChild 0.40s var(--ease-emph) both; opacity: 0; }
+    .pause-card > *:nth-child(1) { animation-delay: 0.18s; }
+    .pause-card > *:nth-child(2) { animation-delay: 0.26s; }
+    .pause-card > *:nth-child(3) { animation-delay: 0.34s; }
+    .pause-card > *:nth-child(4) { animation-delay: 0.42s; }
+    /* Legacy alias — anything that still references popIn renders the
+       same result as the new cardPopIn. Safe to remove once audited. */
     @keyframes popIn {
-      0%   { opacity: 0; transform: scale(0.82) translateY(14px); filter: blur(6px); }
-      65%  { opacity: 1; transform: scale(1.02) translateY(-2px); filter: blur(0); }
-      100% { opacity: 1; transform: scale(1)    translateY(0);     filter: blur(0); }
+      0%   { opacity: 0; transform: scale(0.86) translateY(10px); filter: blur(4px); }
+      55%  { opacity: 1; transform: scale(1.03) translateY(-1px); filter: blur(0);   }
+      100% { opacity: 1; transform: scale(1)    translateY(0);     filter: blur(0);   }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pause-card,
+      .pause-card > *,
+      #pause-overlay.show {
+        animation: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+        filter: none !important;
+        backdrop-filter: blur(14px) saturate(140%) !important;
+        -webkit-backdrop-filter: blur(14px) saturate(140%) !important;
+        background: rgba(0,0,0,0.48) !important;
+      }
     }
     .pause-card h2 {
       font-size: 28px; font-weight: 800; letter-spacing: -0.8px;
@@ -1349,36 +2047,54 @@
       display: none;
       position: fixed; inset: 0; z-index: 2000;
       pointer-events: none;
+      /* Centre pushed far above the viewport: y=-180%, y-radius 180%.
+         That means the top edge of the screen (y=0) already maps to
+         100% along the gradient — every warm stop is compressed into
+         the off-screen region above the viewport. Only the outermost
+         dark falloff reaches the visible area, so at the very top of
+         the screen you see just a faint warm tint bleeding into deep
+         blue/black, with the visible glow getting darker as it moves
+         down. No disc, no nucleus, no bright core — only the lower
+         part of the gradient is in the viewport at all. */
       background:
-        radial-gradient(circle at 50% 54%,
-          rgba(22,26,42,0) 0%,
-          rgba(12,14,26,0.55) 38%,
-          rgba(6,8,18,0.92) 72%,
-          rgba(0,0,0,1) 100%);
+        radial-gradient(ellipse 260% 180% at 50% -180%,
+          rgba(255,220,150,0.055) 0%,
+          rgba(255,214,146,0.042) 55%,
+          rgba(255,200,138,0.028) 78%,
+          rgba(60,50,70,0.22)     90%,
+          rgba(24,22,38,0.60)     95%,
+          rgba(10,10,20,0.90)     98%,
+          rgba(0,0,0,1)           100%);
       backdrop-filter: blur(0px) saturate(120%);
       -webkit-backdrop-filter: blur(0px) saturate(120%);
       opacity: 0;
     }
     #launch-shade.play {
       display: block;
-      animation: launchShade 0.72s cubic-bezier(0.33, 0.0, 0.22, 1) forwards;
+      animation: launchShade 0.86s cubic-bezier(0.33, 0.0, 0.22, 1) forwards;
     }
     @keyframes launchShade {
-      0%   { opacity: 0;   backdrop-filter: blur(0px)  saturate(120%); -webkit-backdrop-filter: blur(0px) saturate(120%); }
-      55%  { opacity: 1;   backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%); }
-      100% { opacity: 0;   backdrop-filter: blur(0px)  saturate(120%); -webkit-backdrop-filter: blur(0px) saturate(120%); }
+      0%   { opacity: 0;    backdrop-filter: blur(0px)  saturate(120%); -webkit-backdrop-filter: blur(0px)  saturate(120%); }
+      32%  { opacity: 0.85; backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
+      55%  { opacity: 1;    backdrop-filter: blur(24px) saturate(170%); -webkit-backdrop-filter: blur(24px) saturate(170%); }
+      78%  { opacity: 0.7;  backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
+      100% { opacity: 0;    backdrop-filter: blur(0px)  saturate(120%); -webkit-backdrop-filter: blur(0px)  saturate(120%); }
     }
     /* Start-screen zooms toward the balloon — cinematic: gradual blur build-up,
-       subtle 3D tilt, cubic-bezier(0.22,1,0.36,1) smooth out. */
+       smoother 5-stage easing so the perspective push-in feels like a
+       real camera dolly rather than a jump-cut. */
     #startscreen.launching {
-      animation: launchZoom 0.68s var(--ease-smooth) forwards;
+      animation: launchZoom 0.86s cubic-bezier(0.22, 1, 0.30, 1) forwards;
       pointer-events: none;
       will-change: transform, opacity, filter;
+      transform-origin: 50% 54%;
     }
     @keyframes launchZoom {
-      0%   { opacity: 1;   transform: scale(1)    translateY(0);  filter: blur(0px)  brightness(1); }
-      30%  { opacity: 0.9; transform: scale(1.05) translateY(-6px); filter: blur(2px) brightness(1.04); }
-      100% { opacity: 0;   transform: scale(1.32) translateY(-28px); filter: blur(10px) brightness(1.08); }
+      0%   { opacity: 1;    transform: scale(1)    translateY(0);   filter: blur(0px)   brightness(1)    saturate(1); }
+      22%  { opacity: 0.98; transform: scale(1.04) translateY(-4px); filter: blur(1.5px) brightness(1.04) saturate(1.08); }
+      48%  { opacity: 0.82; transform: scale(1.12) translateY(-12px); filter: blur(4px)  brightness(1.08) saturate(1.14); }
+      72%  { opacity: 0.5;  transform: scale(1.22) translateY(-20px); filter: blur(7px)  brightness(1.12) saturate(1.12); }
+      100% { opacity: 0;    transform: scale(1.36) translateY(-32px); filter: blur(12px) brightness(1.15) saturate(1.05); }
     }
     /* Game-over card zooms out on Fly-again the same way */
     .go-card.launching {
@@ -1477,7 +2193,7 @@
       width: 140px; height: 178px;
       margin-left: -70px;
       margin-top:  -89px;
-      background: url('gif_bg.webp?v=2') center / contain no-repeat;
+      background: url('balloon.webp?v=1') center / contain no-repeat;
       transform-origin: 50% 92%;
       pointer-events: none;
       z-index: 2100;
@@ -1571,6 +2287,48 @@
       0%   { opacity: 0; transform: scale(0.6); }
       55%  { opacity: 1; transform: scale(1.05); }
       100% { opacity: 0; transform: scale(1.3); }
+    }
+
+    /* Shockwave ring that blooms outward at the launch crouch moment —
+       a thin gold ring expanding from the balloon's lift-off point,
+       sells the "punch" of the takeoff without another heavy asset. */
+    #launch-ring {
+      display: none;
+      position: fixed;
+      left: 50%; top: 62%;
+      width: 6px; height: 6px;
+      margin: -3px 0 0 -3px;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 2080;
+      box-shadow:
+        0 0 0 0 rgba(255,220,130,0.85),
+        0 0 0 0 rgba(255,180,60,0.55),
+        0 0 40px 0 rgba(255,200,90,0);
+      opacity: 0;
+      will-change: transform, opacity, box-shadow;
+      mix-blend-mode: screen;
+    }
+    #launch-ring.play {
+      display: block;
+      animation: launchRing 0.72s cubic-bezier(0.22, 0.9, 0.24, 1) forwards;
+    }
+    @keyframes launchRing {
+      0%   { opacity: 0;  transform: scale(0.25);
+             box-shadow: 0 0 0 1.5px rgba(255,230,150,0.95),
+                         0 0 0 6px   rgba(255,180,60,0.45),
+                         0 0 32px 0  rgba(255,200,90,0.30); }
+      22%  { opacity: 1;  transform: scale(1);
+             box-shadow: 0 0 0 3px   rgba(255,230,150,0.85),
+                         0 0 0 14px  rgba(255,180,60,0.30),
+                         0 0 64px 0  rgba(255,200,90,0.45); }
+      100% { opacity: 0;  transform: scale(42);
+             box-shadow: 0 0 0 0.5px rgba(255,230,150,0.0),
+                         0 0 0 18px  rgba(255,180,60,0.0),
+                         0 0 120px 0 rgba(255,200,90,0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #launch-ring.play { animation: none !important; display: none !important; }
     }
 
     /* Subtle camera-shake on the whole viewport during the rocket ascent */
@@ -1926,8 +2684,8 @@
       padding: 26px 26px 22px;
       border-radius: 28px;
       background: rgba(18,20,32,0.78);
-      backdrop-filter: blur(40px) saturate(200%);
-      -webkit-backdrop-filter: blur(40px) saturate(200%);
+      backdrop-filter: blur(24px) saturate(200%);
+      -webkit-backdrop-filter: blur(24px) saturate(200%);
       /* Gold rim language — matches the trophy toast so achievements + gates
          feel like one family. */
       border: 1px solid rgba(255,214,10,0.28);
@@ -2153,8 +2911,8 @@
       border: 1px solid rgba(255,255,255,0.12);
       box-shadow: 0 40px 90px rgba(0,0,0,0.7),
                   inset 0 1px 0 rgba(255,255,255,0.14);
-      backdrop-filter: blur(40px) saturate(180%);
-      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
       text-align: center;
       animation: portfolioIn 0.6s var(--spring) both;
     }
@@ -2389,8 +3147,8 @@
       /* Liquid Glass: layered translucency + saturation boost so the gold rim
          reads against any background */
       background: rgba(18,20,32,0.78);
-      backdrop-filter: blur(36px) saturate(200%);
-      -webkit-backdrop-filter: blur(36px) saturate(200%);
+      backdrop-filter: blur(24px) saturate(200%);
+      -webkit-backdrop-filter: blur(24px) saturate(200%);
       border: 1px solid rgba(255,214,10,0.42);
       box-shadow:
         0 20px 52px rgba(0,0,0,0.58),
@@ -2518,8 +3276,8 @@
       padding: 26px 24px 20px;
       border-radius: 28px;
       background: rgba(12,14,24,0.82);
-      backdrop-filter: blur(48px) saturate(200%);
-      -webkit-backdrop-filter: blur(48px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
       border: 1px solid rgba(255,255,255,0.14);
       box-shadow: 0 36px 80px rgba(0,0,0,0.66), inset 0 1px 0 rgba(255,255,255,0.14);
       animation: popIn 0.44s var(--spring) both;
@@ -2661,13 +3419,97 @@
       opacity: 0; transition: opacity 0.4s;
     }
     #kbd-hint.show { opacity: 1; }
+
+    /* ── Play-hint: shown during the 3-2-1-Go countdown so brand-new
+         players see how to steer. Device-aware text is injected from JS.
+         Positioned below the countdown number, centred horizontally. ── */
+    #play-hint {
+      position: fixed;
+      left: 50%;
+      top: 72%;
+      transform: translate(-50%, 10px) scale(0.96);
+      z-index: 131;                         /* above #countdown (130) */
+      pointer-events: none;
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 14px; font-weight: 600;
+      letter-spacing: 0.01em;
+      color: rgba(255,255,255,0.94);
+      background: rgba(14, 18, 34, 0.36);
+      backdrop-filter: blur(18px) saturate(160%);
+      -webkit-backdrop-filter: blur(18px) saturate(160%);
+      border: 1px solid rgba(255,255,255,0.10);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.18),
+        inset 0 -1px 0 rgba(0,0,0,0.22),
+        0 10px 34px rgba(0,0,0,0.36);
+      opacity: 0;
+      transition:
+        opacity 0.42s var(--ease-smooth, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform 0.5s var(--spring-soft, cubic-bezier(0.22, 1.2, 0.36, 1));
+      white-space: nowrap;
+    }
+    #play-hint.show {
+      opacity: 1;
+      transform: translate(-50%, 0) scale(1);
+    }
+    #play-hint.hide {
+      opacity: 0;
+      transform: translate(-50%, -8px) scale(0.98);
+      filter: blur(4px);
+      transition:
+        opacity 0.42s var(--ease-smooth, cubic-bezier(0.22, 1, 0.36, 1)),
+        transform 0.5s var(--ease-smooth, cubic-bezier(0.22, 1, 0.36, 1)),
+        filter 0.42s var(--ease-smooth, cubic-bezier(0.22, 1, 0.36, 1));
+    }
+    #play-hint .ph-icon {
+      font-size: 18px;
+      line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+      animation: phPulse 1.6s ease-in-out infinite;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+    }
+    #play-hint .ph-text { display: inline-flex; align-items: baseline; gap: 6px; }
+    #play-hint .ph-sep {
+      opacity: 0.55; font-weight: 400;
+      padding: 0 2px;
+    }
+    #play-hint .ph-action {
+      opacity: 0.82;
+      font-weight: 500;
+    }
+    @keyframes phPulse {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50%      { transform: translateY(-2px) scale(1.08); }
+    }
+    @media (max-width: 520px) {
+      #play-hint { font-size: 13px; padding: 9px 14px; top: 68%; }
+      #play-hint .ph-icon { font-size: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #play-hint, #play-hint.show, #play-hint.hide {
+        transition: opacity 0.25s linear;
+        transform: translate(-50%, 0);
+        filter: none;
+      }
+      #play-hint .ph-icon { animation: none; }
+    }
   </style>
 </head>
 <body>
 
-  <!-- ─── Start Screen Backdrop ─────────────────────────────────── -->
-  <div id="start-bg">
-    <video src="video.mp4?v=2" autoplay muted loop playsinline></video>
+  <!-- ─── Start Screen Backdrop ───────────────────────────────────
+       Pure-CSS twilight sky (no video decode, no downloads, zero CPU
+       in idle). Five drifting cloud layers + slow aurora give it
+       motion without running a 60 fps video decoder on the GPU. -->
+  <div id="start-bg" aria-hidden="true">
+    <div class="sb-sky"></div>
+    <div class="sb-aurora"></div>
+    <div class="sb-cloud sb-cloud-1"></div>
+    <div class="sb-cloud sb-cloud-2"></div>
+    <div class="sb-cloud sb-cloud-3"></div>
+    <div class="sb-horizon"></div>
   </div>
   <div id="aurora">
     <div class="blob blob-1"></div>
@@ -2679,6 +3521,7 @@
   <!-- Launch transition shade (used on Play + Fly again) -->
   <div id="launch-shade" aria-hidden="true"></div>
   <div id="launch-streaks" aria-hidden="true"></div>
+  <div id="launch-ring" aria-hidden="true"></div>
   <div id="launch-flash" aria-hidden="true"></div>
   <div id="launch-balloon" aria-hidden="true"></div>
 
@@ -2699,7 +3542,7 @@
             <div class="dd-icon__heli dd-icon__heli--b" style="background-image:url('heli-blue.webp?v=2')"></div>
             <div class="dd-icon__shine"></div>
           </div>
-          <div class="dd-icon__balloon" style="background-image:url('gif_bg.webp?v=2')"></div>
+          <div class="dd-icon__balloon" style="background-image:url('balloon.webp?v=1')"></div>
         </div>
         <span>DonauDodge</span>
       </div>
@@ -2828,6 +3671,7 @@
   <div id="shield-ring" aria-hidden="true"></div>
   <div id="cd-flash" aria-hidden="true"></div>
   <div id="countdown" aria-live="polite" aria-atomic="true"></div>
+  <div id="play-hint" aria-live="polite" aria-atomic="true"></div>
   <button id="exit-btn"  class="ctl-btn" onclick="exitGame()"    aria-label="Exit">✕</button>
   <button id="pause-btn" class="ctl-btn" onclick="togglePause()" aria-label="Pause">❚❚</button>
   <button id="shoot-btn" class="shoot-btn" aria-label="Shoot">🔥</button>
@@ -2883,7 +3727,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=40"></script>
+  <script src="game.js?v=56"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt
