@@ -101,11 +101,12 @@
     .fx-low #player-icon {
       filter: none !important;
     }
-    /* Vignette, clouds, bg-over, lamp-flicker are hidden in JS on fx-low,
+    /* Vignette, clouds, lamp-flicker are hidden in JS on fx-low,
        but belt-and-suspenders here: force-hide even if something else
-       toggles them back on. Removes ~3 full-viewport compositor passes. */
+       toggles them back on. Removes ~3 full-viewport compositor passes.
+       #bg-over (foreground parallax) stays visible — it's the world
+       floor and removing it makes the game look broken. */
     .fx-low #vignette,
-    .fx-low #bg-over,
     .fx-low #clouds,
     .fx-low #lamp-flicker {
       display: none !important;
@@ -115,7 +116,8 @@
        On older iPad Safari this is the difference between 15 and 45 fps
        during active scroll. `translateZ(0)` is the cheap, widely-supported
        way to push the element onto its own GPU layer. */
-    .fx-low #bg-base {
+    .fx-low #bg-base,
+    .fx-low #bg-over {
       transform: translateZ(0);
       will-change: background-position;
     }
@@ -4189,7 +4191,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=65"></script>
+  <script src="game.js?v=66"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt

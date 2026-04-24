@@ -317,12 +317,7 @@ function measureBgTiles() {
     else img.addEventListener('load', apply, { once: true });
   };
   setFromImg('background.webp?v=2',  w => { _bgBaseTileW = w; });
-  /* Skip the foreground overlay on fx-low — it's hidden anyway (see
-     startGame), and not downloading/decoding it saves ~228 KB of
-     memory + decode time on low-RAM devices. */
-  if (!document.documentElement.classList.contains('fx-low')) {
-    setFromImg('foreground.webp?v=1', w => { _bgOverTileW = w; });
-  }
+  setFromImg('foreground.webp?v=1', w => { _bgOverTileW = w; });
 }
 measureBgTiles();
 window.addEventListener('resize', () => {
@@ -1103,7 +1098,17 @@ function activateShield() {
   if (shieldBar) shieldBar.style.setProperty('--fill', '1');
   _lastShFill = 1;
   const ring = $('shield-ring');
-  if (ring) { ring.classList.add('show'); ring.classList.remove('expire'); }
+  if (ring) {
+    /* Set position vars BEFORE adding .show so the ring appears on the
+       player on its very first frame. Without this the default --sx/--sy
+       (0,0) cause a single-frame flash at the viewport top-left before
+       the next loop tick calls positionShieldRing(). On low-tier devices
+       running at 30 fps the flash lasts ~33 ms and is clearly visible. */
+    ring.style.setProperty('--sx', `${px.toFixed(1)}px`);
+    ring.style.setProperty('--sy', `${py.toFixed(1)}px`);
+    ring.classList.add('show');
+    ring.classList.remove('expire');
+  }
 
   /* Cyan shimmer burst on pickup */
   for (let i = 0; i < 32; i++) {
@@ -2083,13 +2088,16 @@ function startGame() {
   $('aurora').style.display      = 'none';
   $('stars').style.display       = 'none';
   $('bg-base').style.display     = 'block';
-  /* On low-tier devices (old iPad, budget Android), render only ONE
-     parallax layer + no vignette — the foreground.webp overlay doubles
-     per-frame background-position writes and repaint area, and the
-     radial-gradient vignette is another full-viewport compositor pass.
-     Keeping just the main background still reads as a moving world. */
+  /* On low-tier devices (old iPad, budget Android), strip only the
+     purely-decorative overlay layers: vignette (full-viewport radial
+     gradient), clouds (drifting animation), and lamp-flicker (filter
+     keyframes). The foreground parallax STAYS — without it the heli
+     appears to fly in a void with no world floor, which reads as a
+     broken visual. The real mobile wins are the three layers above
+     (each a separate compositor pass); the foreground is cheap by
+     comparison because it only updates backgroundPositionX. */
   const _isLow = document.documentElement.classList.contains('fx-low');
-  $('bg-over').style.display     = _isLow ? 'none' : 'block';
+  $('bg-over').style.display     = 'block';
   if (lampFlicker) lampFlicker.style.display = _isLow ? 'none' : 'block';
   $('clouds').style.display      = _isLow ? 'none' : 'block';
   $('vignette').style.display    = _isLow ? 'none' : 'block';
