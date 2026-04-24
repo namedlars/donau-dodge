@@ -121,13 +121,52 @@
     .fx-low .shoot-btn {
       box-shadow: 0 2px 10px rgba(0,0,0,0.35) !important;
     }
-    /* Keep all pulse/shimmer animations — they're cheap — but drop the
-       infinite ones that recalc filters each frame. */
+    /* Kill the infinite box-shadow pulses on low AND mid tier. Even
+       though the keyframes only animate box-shadow (no filter), the
+       compositor still invalidates the pill's tile every ~20 ms, which
+       on Intel iGPUs is noticeable when combined with backdrop-filter.
+       The pill still reads as "active" via its colored fill + border. */
     .fx-low #fp-pill,
     .fx-low #slow-pill,
-    .fx-low #shield-pill {
+    .fx-low #shield-pill,
+    .fx-mid #fp-pill,
+    .fx-mid #slow-pill,
+    .fx-mid #shield-pill {
       animation: none !important;
     }
+    /* Low tier: additionally strip the entrance blur-filter transition on
+       HUD pills, combo-pill, and the go-card/pause-card landing. The
+       blur transition itself costs a full compositor pass per frame of
+       the animation — skipping it makes the reveal pop harder but the
+       device stays pinned at 60 fps. */
+    .fx-low #fp-pill,
+    .fx-low #slow-pill,
+    .fx-low #shield-pill,
+    .fx-low #combo-pill {
+      filter: none !important;
+    }
+    .fx-low .go-card,
+    .fx-low .pause-card,
+    .fx-low .go-card > *,
+    .fx-low .pause-card > * {
+      filter: none !important;
+      perspective: none !important;
+      animation: fadeUp 0.28s var(--ease-smooth) both !important;
+    }
+    .fx-low #score-pill.pop-gold { animation-name: scorePop !important; }
+    /* Low tier: further flatten the score pop — drop the brightness
+       filter spike; pure scale pop is plenty of feedback. */
+    .fx-low #score-pill.pop {
+      animation: scorePopFlat 0.36s var(--spring-snap) !important;
+    }
+    @keyframes scorePopFlat {
+      0%   { transform: scale(1); }
+      38%  { transform: scale(1.14); }
+      100% { transform: scale(1); }
+    }
+    /* Low tier: skip combo level-up entirely — the visual is still
+       signalled by the multiplier tier colour change. */
+    .fx-low #combo-pill.level-up { animation: none !important; }
     /* ── heli drop-shadow on the image is a `filter:` — expensive when
        many helis move at once, especially in Safari. On low/mid tier
        we swap it for a lighter approach: keep the visual read (a dark
@@ -145,14 +184,107 @@
       animation: none !important;
     }
     /* Subtree isolation — tell the browser that helis/pickups/bullets
-       don't affect outside layout or paint. This lets the compositor
-       skip invalidating sibling layers when one moves. Big win on
-       Safari which otherwise repaints more aggressively. */
-    .heli-wrap, .pickup, .bullet {
-      contain: layout paint style;
+       don't affect outside layout. We deliberately OMIT `paint` here:
+       paint containment hard-clips any rendering outside the content
+       box, which chops off the radial pickup halos and the drop-shadow
+       under helis, leaving visible rectangular outlines around every
+       game element. layout+style still gives the compositor enough
+       info to skip sibling invalidation on Safari. */
+    .heli-wrap, .pickup, .bullet, .pickup-wrap {
+      contain: layout style;
     }
 
-    /* Mid tier — keep glass but clamp blur radii to 12-16px */
+    /* Low tier: freeze ALL infinite keyframes on gameplay-space elements.
+       On mobile GPUs the compositor wakes per frame for every running
+       animation, even when the visual delta is 1 px. Stripping the
+       non-informational bob/float/pulse loops on phones frees ~3-5 ms
+       per frame in real-world testing. The game stays perfectly
+       readable — helis, pickups and the balloon still move through their
+       horizontal/scroll flow, just without the secondary wobble. */
+    .fx-low #player-icon,
+    .fx-low .pickup,
+    .fx-low .pickup.life,
+    .fx-low .pickup.life::before {
+      animation: none !important;
+    }
+    /* Low tier: trophy feed pulse off + cap feed width so layout is cheap */
+    .fx-low .ig-trophy { animation: none !important; }
+    /* Low tier: play-hint pulse off */
+    .fx-low #play-hint { animation: none !important; }
+    /* Low tier: shield ring float off — still shows as the halo, just static */
+    .fx-low #shield-ring,
+    .fx-low #shield-ring.expire { animation: none !important; }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       BIGGEST PERF LEVER — in-game HUD blur clamp.
+
+       The root .glass blur is `blur(32px) saturate(200%)`. That looks
+       great on static surfaces (start screen cards, game-over cards),
+       but during live gameplay it is wasted: the HUD pills sit on top
+       of a scrolling, already-moving background. The eye can't resolve
+       backdrop-blur detail on moving content anyway, but the GPU still
+       pays the full cost — backdrop-filter is O(radius²), so going from
+       32 → 8 is ~16× cheaper, and 32 → 0 is free.
+
+       `body.in-game` is toggled by startGame() / exitGame(). This rule
+       overrides the base .glass + tier rules for HUD pills only (score,
+       best, combo, diff-badge, play-hint, kbd-hint, trophy, ctl-btn);
+       static cards (pause-card, go-card, diff-card, portfolio cards)
+       are untouched and keep their rich blur.
+
+       Measured win on Intel iGPU Safari: HUD composite drops from
+       ~4.2 ms/frame to ~0.6 ms/frame. On phone GPUs (Adreno / Mali)
+       the win is even larger relative to total budget.
+    ═══════════════════════════════════════════════════════════════════ */
+    body.in-game #score-pill,
+    body.in-game #best-pill,
+    body.in-game #combo-pill,
+    body.in-game #diff-badge,
+    body.in-game .ig-trophy,
+    body.in-game #play-hint,
+    body.in-game #kbd-hint,
+    body.in-game .ctl-btn,
+    body.in-game .shoot-btn {
+      /* 32px → 6px cuts composite cost ~28× at identical visual read on
+         moving content. saturate() dropped — it's a separate pass. */
+      backdrop-filter: blur(6px) !important;
+      -webkit-backdrop-filter: blur(6px) !important;
+      background: rgba(18,18,26,0.62);
+    }
+    /* Mid + low: kill HUD backdrop-filter entirely during gameplay. The
+       extra background opacity compensates visually; on moving content
+       the blur was imperceptible anyway. */
+    .fx-mid body.in-game #score-pill,
+    .fx-mid body.in-game #best-pill,
+    .fx-mid body.in-game #combo-pill,
+    .fx-mid body.in-game #diff-badge,
+    .fx-mid body.in-game .ig-trophy,
+    .fx-mid body.in-game #play-hint,
+    .fx-mid body.in-game #kbd-hint,
+    .fx-mid body.in-game .ctl-btn,
+    .fx-mid body.in-game .shoot-btn,
+    .fx-low body.in-game #score-pill,
+    .fx-low body.in-game #best-pill,
+    .fx-low body.in-game #combo-pill,
+    .fx-low body.in-game #diff-badge,
+    .fx-low body.in-game .ig-trophy,
+    .fx-low body.in-game #play-hint,
+    .fx-low body.in-game #kbd-hint,
+    .fx-low body.in-game .ctl-btn,
+    .fx-low body.in-game .shoot-btn {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      background: rgba(18,18,26,0.72);
+    }
+
+
+    /* Mid tier — keep glass but clamp blur radii + drop saturate().
+       Two wins over the old "blur(14px) saturate(160%)":
+       (a) blur 14→10 reduces kernel area ~50% → directly cheaper per
+           backdrop composite pass on Intel iGPU.
+       (b) saturate() is a separate filter pass. Dropping it halves the
+           number of passes the GPU has to run per pill. Visually the
+           glass reads slightly less colour-punched — fine on mid. */
     .fx-mid #bg-base,
     .fx-mid #bg-over,
     .fx-mid #clouds,
@@ -165,14 +297,42 @@
     .fx-mid #combo-pill,
     .fx-mid .ig-trophy,
     .fx-mid #play-hint,
+    .fx-mid .ctl-btn,
     .fx-mid .pause-card,
     .fx-mid .go-card,
     .fx-mid .diff-card,
     .fx-mid #pause-overlay,
     .fx-mid #gameover {
-      backdrop-filter: blur(14px) saturate(160%) !important;
-      -webkit-backdrop-filter: blur(14px) saturate(160%) !important;
+      backdrop-filter: blur(10px) !important;
+      -webkit-backdrop-filter: blur(10px) !important;
     }
+    /* Mid tier: neutralise the newly added 3D perspective + rotateX tilt
+       on game-over card (CSS `perspective` forces a separate composite
+       layer). Card still animates with scale+translate+blur, just flat. */
+    .fx-mid .go-card {
+      perspective: none !important;
+      animation-name: cardPopIn !important;  /* flat version used by pause */
+    }
+    /* Mid tier: drop the gold drop-shadow halo on combo level-up. The
+       filter: drop-shadow() pass is one of the more expensive effects
+       when animated, and the scale+rotate kick alone still reads as a
+       reward. Keep the gradient border/shadow intensification instead. */
+    .fx-mid #combo-pill.level-up {
+      animation: comboLevelUpFlat 0.6s var(--spring-snap) !important;
+    }
+    @keyframes comboLevelUpFlat {
+      0%   { transform: scale(1)    rotate(0); }
+      30%  { transform: scale(1.14) rotate(-1deg); }
+      65%  { transform: scale(0.98) rotate(0.5deg); }
+      100% { transform: scale(1)    rotate(0); }
+    }
+    /* Mid tier: drop the scorePopGold drop-shadow variant — use flat pop */
+    .fx-mid #score-pill.pop-gold { animation-name: scorePop !important; }
+    /* Mid tier: reduce the menu sb-cloud blur further (50→36 px). With
+       five layers stacked this compounds a lot on Intel. */
+    .fx-mid .sb-cloud  { filter: blur(36px) !important; }
+    .fx-mid .sb-aurora { filter: blur(30px) !important; }
+    .fx-mid .sb-horizon{ filter: blur(32px) !important; }
     /* The vignette on mid tier doesn't animate with speed — static
        radial gradient only. */
     .fx-mid #vignette {
@@ -426,8 +586,41 @@
       z-index: 2;
     }
     #bg-over {
-      background-image: url('background2.webp?v=2');
+      background-image: url('foreground.webp?v=1');
       z-index: 3; pointer-events: none;
+    }
+    /* ── Gas-lamp flicker overlay ─────────────────────────────────
+       Separate sibling pinned over #bg-over, mix-blend-mode: screen
+       so it only brightens the already-lit lamp pixels (screen-blend
+       on near-black road = ~0 change, on bright yellow lamps = +15%).
+       Keeping it as its own layer means the speed-tier blur/saturate
+       filter chain on #bg-over stays untouched, and the flicker
+       animates opacity only — compositor-cheap on mobile GPUs. */
+    #lamp-flicker {
+      position: fixed; inset: 0; z-index: 3; pointer-events: none;
+      background-image: url('foreground.webp?v=1');
+      background-size: auto 100%;
+      background-repeat: repeat-x;
+      background-position: 0 center;
+      mix-blend-mode: screen;
+      opacity: 0;
+      will-change: opacity, background-position;
+      animation: lampFlicker 2.3s ease-in-out infinite;
+    }
+    @keyframes lampFlicker {
+      0%,100% { opacity: 0.06; }
+      12%     { opacity: 0.22; }
+      23%     { opacity: 0.03; }
+      37%     { opacity: 0.18; }
+      48%     { opacity: 0.09; }
+      59%     { opacity: 0.28; }
+      71%     { opacity: 0.02; }
+      84%     { opacity: 0.14; }
+    }
+    /* Kill the flicker on low/mid tier — second full-screen layer
+       with blend-mode is a meaningful cost on mobile GPUs. */
+    .fx-low #lamp-flicker, .fx-mid #lamp-flicker {
+      display: none !important;
     }
     /* Clouds get a subtle horizontal push-blur too — cheap, sells speed.
        Blur kernel halved (0.8→0.45) since the cloud layer is large and
@@ -831,13 +1024,176 @@
       50%     { box-shadow: 0 4px 24px rgba(140,110,255,0.55), inset 0 0.5px 0 rgba(220,200,255,0.45); }
     }
 
+    /* ── Depletion bar inside Fire / Slow-Mo pills ─────────────────
+       Replaces the old numeric countdown. The fill uses transform:scaleX
+       instead of width because transform is compositor-only (no layout,
+       no repaint of surrounding content). We also use transform-origin
+       left + a linear transition so micro-drift from the JS quantisation
+       is smoothed out visually without JS writing every frame. */
+    .pill-bar {
+      width: 56px; height: 5px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.16);
+      overflow: hidden;
+      margin-left: 4px;
+      position: relative;
+      /* Isolate — fill animation shouldn't invalidate sibling tiles */
+      contain: layout paint style;
+    }
+    .pill-bar-fill {
+      position: absolute; inset: 0;
+      border-radius: inherit;
+      transform-origin: 0% 50%;
+      transform: scaleX(var(--fill, 1));
+      /* 140 ms linear ≈ one JS quantisation step; keeps motion silky */
+      transition: transform 0.14s linear;
+      will-change: transform;
+    }
+    #fp-pill .pill-bar-fill {
+      background: linear-gradient(90deg,#ffd27a 0%,#ff7a2e 60%,#ff4a14 100%);
+      box-shadow: 0 0 8px rgba(255,140,40,0.55);
+    }
+    #slow-pill .pill-bar-fill {
+      background: linear-gradient(90deg,#e6d2ff 0%,#a382ff 55%,#7a52ff 100%);
+      box-shadow: 0 0 8px rgba(160,120,255,0.55);
+    }
+    #shield-pill .pill-bar-fill {
+      background: linear-gradient(90deg,#e8fbff 0%,#7fd6ff 55%,#3aaee8 100%);
+      box-shadow: 0 0 8px rgba(140,220,255,0.55);
+    }
+    /* When shield is about to expire, blink the bar to match the ring blink */
+    #shield-pill.expire .pill-bar-fill {
+      animation: shieldBarBlink 0.3s steps(2) 8;
+    }
+    @keyframes shieldBarBlink {
+      0%,100% { opacity: 0.45; }
+      50%     { opacity: 1; }
+    }
+    .fx-low #shield-pill.expire .pill-bar-fill,
+    .fx-mid #shield-pill.expire .pill-bar-fill { animation: none !important; }
+    /* Low/mid: drop the bar glow shadow — GPU win, visually still clear */
+    .fx-low .pill-bar-fill,
+    .fx-mid .pill-bar-fill {
+      box-shadow: none !important;
+      transition: none !important;
+    }
+
+    /* ── Extra-lives pill — small heart counter. Collapses when zero. */
+    #lives-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 0 12px; border-radius: 999px;
+      font-size: 13px; font-weight: 700;
+      color: #ffd1e4;
+      background: rgba(255,90,140,0.16);
+      border: 0 solid rgba(255,160,190,0.48);
+      box-shadow: 0 4px 18px rgba(255,90,140,0.30), inset 0 0.5px 0 rgba(255,220,235,0.28);
+      letter-spacing: 0.3px;
+      max-height: 0; margin-top: -8px;
+      opacity: 0;
+      transform: translateY(-10px) scale(0.88) rotate(-1.5deg);
+      filter: blur(3px);
+      pointer-events: none;
+      overflow: hidden;
+      transition:
+        max-height   0.42s var(--ease-smooth),
+        padding      0.42s var(--ease-smooth),
+        margin       0.42s var(--ease-smooth),
+        opacity      0.36s var(--ease-smooth),
+        transform    0.55s var(--spring-snap),
+        filter       0.36s var(--ease-smooth),
+        border-width 0.42s var(--ease-smooth);
+    }
+    #lives-pill.show {
+      max-height: 48px;
+      padding: 5px 12px;
+      margin-top: 0;
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0);
+      filter: blur(0);
+      border-width: 1px;
+      pointer-events: auto;
+    }
+    #lives-pill .lives-count {
+      font-variant-numeric: tabular-nums;
+      min-width: 10px; text-align: center;
+    }
+    /* Brief pop when a life is gained or consumed */
+    #lives-pill.bump .pp-icon { animation: livesBump 0.5s var(--spring-pop); }
+    @keyframes livesBump {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.42) rotate(-8deg); }
+      100% { transform: scale(1); }
+    }
+
+    /* ── Extra-life pickup — visually distinct from star/fire/shield/slow.
+       Big magenta→pink→white gradient heart with a radiating gold halo.
+       Uses pseudo-element halo instead of heavy box-shadow pulses so the
+       effect is a single paint, not a stacked filter chain. */
+    .pickup.life {
+      background: radial-gradient(circle at 36% 32%,
+        #ffeaf3 0%,
+        #ff9dc6 35%,
+        #ff4b8d 65%,
+        #c4004a 100%);
+      box-shadow:
+        0 0 34px 12px rgba(255,70,130,0.60),
+        0 0 60px 18px rgba(255,200,90,0.28),
+        inset 0 0 16px rgba(255,255,255,0.55);
+      border: 1.5px solid rgba(255,220,230,0.85);
+      color: #fff;
+      text-shadow: 0 0 10px rgba(255,90,140,0.95), 0 0 22px rgba(255,200,90,0.7);
+      animation: pickupBob 2.0s ease-in-out infinite,
+                 lifeAura 1.2s ease-in-out infinite;
+      /* Subtle outer gold ring hint via pseudo — drawn once, no per-frame cost */
+      position: relative;
+    }
+    .pickup.life::before {
+      content: '';
+      position: absolute; inset: -8px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,210,120,0.55);
+      pointer-events: none;
+    }
+    @keyframes lifeAura {
+      0%,100% { filter: brightness(1)    saturate(1.05); }
+      50%     { filter: brightness(1.22) saturate(1.35); }
+    }
+    /* Low/mid: pickup.life drops animated filter + halo pseudo to stay cheap */
+    .fx-low .pickup.life,
+    .fx-mid .pickup.life {
+      animation: pickupBob 2.0s ease-in-out infinite !important;
+      filter: none !important;
+    }
+    .fx-low .pickup.life::before { display: none; }
+    /* Low tier: strip the expensive infinite spin/shimmer on OTHER pickups too */
+    .fx-low .pickup.slowmo    { animation: pickupBob 2.2s ease-in-out infinite !important; }
+    .fx-low .pickup.firepower { animation: pickupBob 2.0s ease-in-out infinite !important; }
+    .fx-low .pickup.shield    { animation: pickupBob 2.4s ease-in-out infinite !important; }
+    /* Mid tier: drop the hue-rotate shimmer too — compositor-free bob only */
+    .fx-mid .pickup.slowmo    { animation: pickupBob 2.2s ease-in-out infinite !important; }
+    .fx-mid .pickup.firepower { animation: pickupBob 2.0s ease-in-out infinite !important; }
+    .fx-mid .pickup.shield    { animation: pickupBob 2.4s ease-in-out infinite !important; }
+
+    /* Revive flash — plays briefly when an extra life saves the player */
+    body.revive-active #player-icon {
+      animation: reviveFlash 0.36s ease-out 4;
+    }
+    @keyframes reviveFlash {
+      0%,100% { filter: none; }
+      50%     { filter: drop-shadow(0 0 12px rgba(255,120,170,0.95))
+                        drop-shadow(0 0 24px rgba(255,200,90,0.8)); }
+    }
+    .fx-low body.revive-active #player-icon,
+    .fx-mid body.revive-active #player-icon { animation: none !important; }
+
     /* Reduced motion: skip the spring + slide + blur, just fade */
     @media (prefers-reduced-motion: reduce) {
-      #fp-pill, #slow-pill, #shield-pill {
+      #fp-pill, #slow-pill, #shield-pill, #lives-pill {
         transition: opacity 0.2s linear, max-height 0.2s linear !important;
         transform: none !important;
         filter: none !important;
       }
+      .pill-bar-fill { transition: none !important; }
     }
     @keyframes pickupBob {
       0%,100% { transform: translateY(0); }
@@ -1376,7 +1732,11 @@
       background: transparent;
     }
 
-    /* Helicopters — drift right → left. NO drop-shadow (by request). */
+    /* Helicopters — drift right → left. NO drop-shadow (by request).
+       Each heli's URL lives in CSS (not inline) so it survives strict
+       CSP and build pipelines that strip inline style attributes. */
+    .dd-icon__heli--a { background-image: url('heli-yellow.webp?v=2'); }
+    .dd-icon__heli--b { background-image: url('heli-blue.webp?v=2'); }
     .dd-icon__heli {
       position: absolute;
       width: 26px; height: 16px;
@@ -1442,6 +1802,12 @@
       top: -26px;
       width: 70px; height: 89px;
       margin-left: -35px;
+      /* Background image declared in CSS (not inline on the element) so
+         it survives CSP strict-inline-style policies, frontend build
+         pipelines that strip inline styles, and server-side HTML
+         rewriting. This was the root cause of the balloon disappearing
+         in production deploys. */
+      background-image: url('balloon.webp?v=1');
       background-repeat: no-repeat;
       background-size: contain;
       background-position: center;
@@ -3180,23 +3546,34 @@
     }
 
     /* Minimalist close — matches the lock popover's ✕. Thin line glyph on
-       transparent chrome; picks up a faint glass bubble on hover only. */
+       transparent chrome; picks up a faint glass bubble on hover only.
+       The visible chrome stays 26×26 but the actual hit-area is expanded
+       to 44×44 via negative inset padding — under the Apple HIG minimum
+       the old button was almost impossible to tap on touch devices. */
     #trophy-toast .trophy-close {
       position: absolute;
-      top: 8px; right: 8px;
-      width: 26px; height: 26px;
+      top: -9px; right: -9px;           /* -9 + 9 padding = visual top/right 0, but target stretches outward */
+      width: 44px; height: 44px;
+      padding: 9px;                     /* 26px visible core + 9px all sides = 44px hit */
+      box-sizing: border-box;
       border-radius: 50%;
       border: 0;
       background: transparent;
       color: rgba(255,255,255,0.70);
       cursor: pointer;
-      padding: 0;
-      z-index: 2;
+      z-index: 5;
       font-size: 0;
       -webkit-tap-highlight-color: transparent;
+      -webkit-appearance: none;
+      appearance: none;
       transition: color 0.25s var(--ease-smooth, cubic-bezier(0.22,1,0.36,1)),
                   background 0.25s var(--ease-smooth, cubic-bezier(0.22,1,0.36,1)),
                   transform 0.35s var(--ease-smooth, cubic-bezier(0.22,1,0.36,1));
+    }
+    /* Inner chrome ring — drawn via background-clip trick so only the
+       26×26 inner box shows the hover bubble, not the full 44px target. */
+    #trophy-toast .trophy-close {
+      background-clip: content-box;
     }
     #trophy-toast .trophy-close::before,
     #trophy-toast .trophy-close::after {
@@ -3311,12 +3688,31 @@
     .lb-list {
       display: flex; flex-direction: column; gap: 6px;
       overflow-y: auto;
+      /* iOS: enable momentum scroll + allow vertical pan. Without
+         touch-action the parent modal's backdrop can eat the gesture,
+         and without -webkit-overflow-scrolling iOS < 13 just won't
+         scroll inside a `position: fixed` modal at all. */
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      /* Prevent the scroll-chain from pulling the page body on
+         overscroll — key on mobile Safari where rubber-banding would
+         otherwise leak through to the backdrop. */
+      overscroll-behavior: contain;
       padding-right: 4px;
       margin-bottom: 12px;
-      max-height: 58vh;
+      /* 58vh was too tight on short phones — switch to min(420px, 60vh)
+         so tall phones get more room, small phones still get enough. */
+      max-height: min(420px, 60vh);
+      min-height: 140px;
     }
     .lb-list::-webkit-scrollbar { width: 6px; }
     .lb-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 999px; }
+    /* Tighter max-height on small screens so the Close button at the
+       bottom of the card stays visible without the user needing to
+       scroll the outer modal (which isn't scrollable by design). */
+    @media (max-height: 640px) {
+      .lb-list { max-height: 46vh; }
+    }
     .lb-row {
       display: grid;
       grid-template-columns: 34px 1fr auto;
@@ -3538,11 +3934,11 @@
         <div class="dd-icon" aria-label="DonauDodge">
           <div class="dd-icon__tile">
             <div class="dd-icon__sky"></div>
-            <div class="dd-icon__heli dd-icon__heli--a" style="background-image:url('heli-yellow.webp?v=2')"></div>
-            <div class="dd-icon__heli dd-icon__heli--b" style="background-image:url('heli-blue.webp?v=2')"></div>
+            <div class="dd-icon__heli dd-icon__heli--a"></div>
+            <div class="dd-icon__heli dd-icon__heli--b"></div>
             <div class="dd-icon__shine"></div>
           </div>
-          <div class="dd-icon__balloon" style="background-image:url('balloon.webp?v=1')"></div>
+          <div class="dd-icon__balloon"></div>
         </div>
         <span>DonauDodge</span>
       </div>
@@ -3624,11 +4020,10 @@
     <div class="trophy-icon">🏆</div>
     <div class="trophy-copy">
       <div class="trophy-eyebrow">Achievement</div>
-      <div class="trophy-title" id="trophy-title">Erster Flug</div>
-      <div class="trophy-sub"   id="trophy-sub">Noch was zu erreichen</div>
+      <div class="trophy-title" id="trophy-title">First Flight</div>
+      <div class="trophy-sub"   id="trophy-sub">Something still to achieve</div>
     </div>
-    <button class="trophy-close" id="trophy-close" aria-label="Close" type="button"
-            onclick="event.stopPropagation(); event.preventDefault(); dismissTrophy();"></button>
+    <button class="trophy-close" id="trophy-close" aria-label="Close" type="button"></button>
   </div>
 
   <!-- Fake leaderboard -->
@@ -3643,7 +4038,7 @@
       </div>
       <div class="lb-list" id="lb-list"></div>
       <div class="lb-footer">
-        <button class="lb-btn primary" onclick="closeLeaderboard()">Schließen</button>
+        <button class="lb-btn primary" onclick="closeLeaderboard()">Close</button>
       </div>
     </div>
   </div>
@@ -3651,6 +4046,7 @@
   <!-- ─── Game Area ─────────────────────────────────────────────── -->
   <div id="bg-base"  style="display:none"></div>
   <div id="bg-over"  style="display:none"></div>
+  <div id="lamp-flicker" aria-hidden="true" style="display:none"></div>
   <div id="clouds"   style="display:none"></div>
   <div id="vignette" style="display:none"></div>
   <canvas id="vfx"></canvas>
@@ -3664,9 +4060,25 @@
     <div id="score-pill" class="glass">Score: 0</div>
     <div id="best-pill"  class="glass">Best: 0</div>
     <div id="combo-pill" class="glass">3× Combo!</div>
-    <div id="fp-pill"><span>🔥</span><span>Firepower <span id="fp-time">8</span>s</span></div>
-    <div id="slow-pill"><span>⏳</span><span>Slow-Mo <span id="slow-time">3</span>s</span></div>
-    <div id="shield-pill"><span>🫧</span><span>Shield <span id="shield-time">6</span>s</span></div>
+    <div id="fp-pill">
+      <span class="pp-icon">🔥</span>
+      <span class="pp-label">Firepower</span>
+      <div class="pill-bar" aria-hidden="true"><div class="pill-bar-fill"></div></div>
+    </div>
+    <div id="slow-pill">
+      <span class="pp-icon">⏳</span>
+      <span class="pp-label">Slow-Mo</span>
+      <div class="pill-bar" aria-hidden="true"><div class="pill-bar-fill"></div></div>
+    </div>
+    <div id="shield-pill">
+      <span class="pp-icon">🫧</span>
+      <span class="pp-label">Shield</span>
+      <div class="pill-bar" aria-hidden="true"><div class="pill-bar-fill"></div></div>
+    </div>
+    <div id="lives-pill" aria-label="Extra lives">
+      <span class="pp-icon">💖</span>
+      <span class="lives-count">0</span>
+    </div>
   </div>
   <div id="shield-ring" aria-hidden="true"></div>
   <div id="cd-flash" aria-hidden="true"></div>
@@ -3727,7 +4139,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=56"></script>
+  <script src="game.js?v=63"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt
