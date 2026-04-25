@@ -456,12 +456,19 @@ const _PERF_HUD = (() => {
     if (!state.enabled) return;
     state.lastMs = ms;
     if (ms > state.peakMs) state.peakMs = ms;
-    /* Skip absurd values (tab background) so the rolling avg stays useful */
-    if (ms > 500) return;
-    state.samples[state.sIdx] = ms;
-    state.sIdx = (state.sIdx + 1) % state.samples.length;
-    if (state.sCount < state.samples.length) state.sCount++;
-    /* Session aggregation — only counts frames between sessionReset/End */
+    /* Skip the rolling-avg samples for tab-background frames (>2s) so
+       the live HUD avg doesn't get polluted, but STILL count them in
+       the session aggregation — otherwise the report looks deceptively
+       small when the page is heavily throttled (iPad with many tabs,
+       backgrounded RAF, etc). Without session counting, a 53-second
+       run that the device throttled to 0.1 fps was showing only
+       7 "frames" in the report instead of the truth. */
+    if (ms <= 2000) {
+      state.samples[state.sIdx] = ms;
+      state.sIdx = (state.sIdx + 1) % state.samples.length;
+      if (state.sCount < state.samples.length) state.sCount++;
+    }
+    /* Session aggregation — count EVERY tick, however slow. */
     const s = state.sess;
     if (s) {
       s.frames++;

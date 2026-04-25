@@ -142,23 +142,20 @@
     }
     /* Slash backdrop-filter radii on low tier — the biggest mobile win.
        We keep the background color so glass pills still read as glass,
-       just without the expensive backdrop blur compositor pass. */
-    .fx-low .glass,
-    .fx-low #score-pill,
-    .fx-low #best-pill,
-    .fx-low #combo-pill,
-    .fx-low #diff-badge,
-    .fx-low .ig-trophy,
-    .fx-low #play-hint,
-    .fx-low .pause-card,
-    .fx-low .go-card,
-    .fx-low .diff-card,
-    .fx-low #launch-shade,
-    .fx-low #pause-overlay,
-    .fx-low #gameover,
-    .fx-low .portfolio-card {
+       just without the expensive backdrop blur compositor pass.
+
+       UNIVERSAL on low: too many one-off backdrop-filter sites across
+       this file (40+ selectors) to keep an explicit allow-list in sync.
+       On low tier we just nuke the property everywhere — the compositor
+       cost of a single backdrop-filter region on iPad is several ms;
+       sustaining 30 fps requires zero of them. The fill colours under
+       the blurs are already opaque enough to read as glass. */
+    .fx-low *,
+    .fx-low *::before,
+    .fx-low *::after {
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
+      mix-blend-mode: normal !important;
     }
     /* Soften shadows — stacked huge-radius box-shadows also hurt on
        low-end (repaints ripple out to the whole shadow area). */
@@ -687,6 +684,26 @@
        with blend-mode is a meaningful cost on mobile GPUs. */
     .fx-low #lamp-flicker, .fx-mid #lamp-flicker {
       display: none !important;
+    }
+    /* ── Strip ALL speed-tier filter chains on fx-low ──────────────
+       `filter: blur(...) saturate(...)` on the two full-screen bg
+       layers + clouds = three full-viewport GPU passes per frame.
+       On iPad 2023 fxlow this is the dominant per-frame cost — each
+       layer is ~2732×2048 backing texture (Retina) and Safari
+       allocates a fresh offscreen buffer for every filter pass. Kill
+       them outright on low tier; the speed sense is already carried
+       by the scroll velocity itself. */
+    .fx-low #bg-base,
+    .fx-low #bg-over,
+    .fx-low #clouds,
+    .fx-low #vignette {
+      filter: none !important;
+      transition: none !important;
+    }
+    /* Transition: low tier doesn't need filter transitions either */
+    .fx-low #bg-base,
+    .fx-low #bg-over {
+      will-change: auto !important;
     }
     /* Clouds get a subtle horizontal push-blur too — cheap, sells speed.
        Blur kernel halved (0.8→0.45) since the cloud layer is large and
@@ -4225,7 +4242,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=74"></script>
+  <script src="game.js?v=75"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt
