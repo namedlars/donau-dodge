@@ -1924,6 +1924,13 @@
       display: none;
       position: fixed; inset: 0; z-index: 300;
       align-items: center; justify-content: center;
+      /* Allow the card to scroll if it grows taller than the viewport
+         (e.g. when the perf debug report is injected). Without this,
+         the bottom of the card — including the buttons — is unreachable
+         in landscape on smaller iPads. */
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 24px 0;
       background: rgba(0,0,0,0.50);
       /* Start at 0 blur; the @keyframes ramps it up. */
       backdrop-filter: blur(0px);
@@ -4201,7 +4208,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=72"></script>
+  <script src="game.js?v=73"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt

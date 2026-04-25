@@ -326,6 +326,10 @@ const _PERF_HUD = (() => {
   const onByUrl = /[?&]perf=1\b/.test(location.search);
   let onByLs = false;
   try { onByLs = localStorage.getItem('dd_perf') === '1'; } catch (_) {}
+  /* If enabled via URL flag, persist so iPad reloads (which often drop
+     query params on PWA-style add-to-home) keep the HUD on without the
+     user having to remember to type ?perf=1 every time. */
+  if (onByUrl) { try { localStorage.setItem('dd_perf', '1'); } catch (_) {} }
   const state = {
     enabled: onByUrl || onByLs,
     el: null,
@@ -589,6 +593,16 @@ const _PERF_HUD = (() => {
         backdropFilter: 'none',
         WebkitBackdropFilter: 'none',
       });
+      /* Override the .go-card > * animations (which include `animation:
+         fadeUp ... both !important` on fx-low). Dynamically-inserted
+         children don't reliably play that animation — the element ends
+         up frozen at the `from { opacity: 0 }` keyframe and is invisible.
+         Forcing opacity/transform/animation with !important via
+         setProperty bypasses the stylesheet rule entirely. */
+      panel.style.setProperty('animation', 'none', 'important');
+      panel.style.setProperty('opacity',  '1',    'important');
+      panel.style.setProperty('transform','none', 'important');
+      panel.style.setProperty('filter',   'none', 'important');
       /* Insert before the buttons so it sits above "Fly again" */
       const firstBtn = card.querySelector('.go-btn');
       if (firstBtn) card.insertBefore(panel, firstBtn);
