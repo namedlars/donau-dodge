@@ -925,6 +925,12 @@
         0 0 36px 8px rgba(140,220,255,0.45),
         inset 0 0 24px rgba(255,255,255,0.35);
       will-change: transform, opacity;
+      /* Base transform anchors the ring to the player position via the
+         JS-set --sx/--sy variables. CRITICAL when the float animation is
+         disabled (fx-low, prefers-reduced-motion): without this the
+         transform falls back to `none` and the ring sits at top-left.
+         When the animation IS running, its transform takes precedence. */
+      transform: translate(var(--sx, 0px), var(--sy, 0px));
       animation: shieldFloat 3s ease-in-out infinite;
     }
     #shield-ring.show { display: block; }
@@ -2163,7 +2169,11 @@
       #best-pill  { font-size: 11px; padding: 3px 12px; }
       #combo-pill { font-size: 12px; padding: 5px 14px; }
       #fp-pill, #slow-pill, #shield-pill { font-size: 11px; padding: 4px 10px; }
-      .ctl-btn { width: 40px; height: 40px; font-size: 14px; }
+      /* Keep the 44×44 Apple HIG minimum on mobile — shrinking to 40 was
+         saving ~4 px of chrome at the cost of making pause/exit legitimately
+         harder to hit for thumbs. The extra 4 px fits fine alongside the
+         HUD (pause-btn offset already clears it). */
+      .ctl-btn { width: 44px; height: 44px; font-size: 15px; }
       #pause-btn { left: calc(62px + env(safe-area-inset-left, 0px)); font-size: 11px; }
       .shoot-btn { width: 56px; height: 56px; font-size: 22px; }
       .go-card { padding: 24px 22px 28px; border-radius: 30px; }
@@ -4191,7 +4201,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=66"></script>
+  <script src="game.js?v=72"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt

@@ -107,6 +107,15 @@ window.__setFxTier = (t) => {
   document.documentElement.classList.add(`fx-${t}`);
   document.body.classList.add(`fx-${t}`);
   localStorage.setItem('dd_fx_tier', t);
+  /* Keep the auto-downgrade chain in sync — without this, manually
+     bumping the tier UP (e.g. 'low' → 'high' for testing) leaves
+     _curTier stuck at 'low' and the downgrade chain silently refuses
+     to engage on the new tier (it short-circuits on 'low'). */
+  _curTier = t;
+  /* Particle cap follows the manual tier change too */
+  PARTICLE_CAP = t === 'low' ? 20 : (t === 'mid' ? 90 : 220);
+  /* Reflect manual changes in the perf report's tier log */
+  if (typeof _PERF_HUD !== 'undefined' && _PERF_HUD.logTierChange) _PERF_HUD.logTierChange(t);
 };
 
 /* Particle-count cap scales with tier so lower devices aren't spending
@@ -117,7 +126,7 @@ window.__setFxTier = (t) => {
 /* Mutable so the auto-downgrade path below can shrink it live when the
    device drops below 45 fps — otherwise the CSS tier would downgrade
    but the particle budget would stay stuck at its load-time value. */
-let PARTICLE_CAP = PERF === 'low' ? 28 : (PERF === 'mid' ? 90 : 220);
+let PARTICLE_CAP = PERF === 'low' ? 20 : (PERF === 'mid' ? 90 : 220);
 
 /* ── Difficulty presets ────────────────────────────────────────── */
 /* Apple system colors — semantic traffic-light ramp:
@@ -258,31 +267,31 @@ let _lastVelBlur = 0;
 let _lastFpFill = -1, _lastSlowFill = -1, _lastShFill = -1;
 
 /* Adaptive quality — rolling frame-time average. If the game runs
-   meaningfully below 60 fps for a sustained stretch on a high/mid tier
-   device, quietly downgrade the tier class. The user sees an instant
-   smoothness boost (blur radii collapse, fewer particles) without any
-   gameplay change. Only downgrades, never upgrades, and only once per
-   session so we don't flip back and forth. */
+   meaningfully below 60 fps for a sustained stretch, quietly downgrade
+   the tier class. CHAINED: high → mid → low (was previously once-only,
+   so a struggling high-tier device that didn't get fast enough at mid
+   would stay stuck mid forever). Sample window is 1.2 s — long enough
+   to ignore GC spikes, short enough that a user feels the relief fast. */
 let _fpsWindowSum   = 0;    /* ms of frames summed */
 let _fpsWindowFrames = 0;   /* frames counted in window */
-let _fpsDowngraded  = false;
+let _curTier        = PERF; /* tracks current tier for chained downgrade */
 function _maybeAutoDowngrade(frameMs) {
-  if (_fpsDowngraded) return;
-  if (PERF === 'low') { _fpsDowngraded = true; return; }
+  if (_curTier === 'low') return;             /* already at the floor */
   /* Skip obvious outliers (tab refocus, GC spike) */
   if (frameMs > 80) return;
   _fpsWindowSum += frameMs;
   _fpsWindowFrames++;
-  /* Evaluate once per ~2 s of real time */
-  if (_fpsWindowSum < 2000) return;
+  /* Evaluate once per ~1.2 s of real time */
+  if (_fpsWindowSum < 1200) return;
   const avgMs = _fpsWindowSum / _fpsWindowFrames;
   const avgFps = 1000 / avgMs;
   _fpsWindowSum = 0;
   _fpsWindowFrames = 0;
-  /* Thresholds chosen conservatively — a healthy phone sits well above 50 */
-  if (avgFps < 45) {
-    const target = PERF === 'high' ? 'mid' : 'low';
-    _fpsDowngraded = true;
+  /* Threshold tightened from 45 → 50: anything under 50 fps is visibly
+     janky, so don't tolerate it. A healthy device sits well above 55. */
+  if (avgFps < 50) {
+    const target = _curTier === 'high' ? 'mid' : 'low';
+    _curTier = target;
     ['low','mid','high'].forEach(x => {
       document.documentElement.classList.remove(`fx-${x}`);
       document.body.classList.remove(`fx-${x}`);
@@ -290,16 +299,320 @@ function _maybeAutoDowngrade(frameMs) {
     document.documentElement.classList.add(`fx-${target}`);
     document.body.classList.add(`fx-${target}`);
     /* Persist so next reload starts already at the cheaper tier and
-       doesn't spend the first 2 s stuttering before we re-detect. */
+       doesn't spend the first 1-2 s stuttering before we re-detect. */
     try { localStorage.setItem('dd_fx_tier', target); } catch (_) {}
+    /* Tell the perf HUD so the game-over report shows the transition */
+    if (typeof _PERF_HUD !== 'undefined' && _PERF_HUD.logTierChange) _PERF_HUD.logTierChange(target);
     /* Shrink the particle cap live — CSS savings alone usually clear
        the fps budget, but pulling the particle cap down in parallel
        finishes the job for edge-case phones. */
-    PARTICLE_CAP = target === 'low' ? 28 : 90;
+    PARTICLE_CAP = target === 'low' ? 16 : 90;
     /* Any currently-alive particles over the new cap are dropped next
      * frame by the existing splice in spawnTrail/other spawners. */
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Performance debug overlay (TEMPORARY — remove after iPad testing).
+   Enable via:
+     • URL flag:    ?perf=1
+     • localStorage: localStorage.dd_perf = '1'
+     • DevTools:     window.__perfHud(true)  /  __perfHud(false)
+   The HUD lives outside any backdrop-filter ancestor and avoids its
+   own filters/blurs so it does not bias what it measures. Updates at
+   ~4 Hz; the per-frame work is just one array push.
+   ────────────────────────────────────────────────────────────────── */
+const _PERF_HUD = (() => {
+  const onByUrl = /[?&]perf=1\b/.test(location.search);
+  let onByLs = false;
+  try { onByLs = localStorage.getItem('dd_perf') === '1'; } catch (_) {}
+  const state = {
+    enabled: onByUrl || onByLs,
+    el: null,
+    timer: null,
+    /* ring buffer of recent frame ms values (most recent first) */
+    samples: new Array(120).fill(0),
+    sIdx: 0,
+    sCount: 0,
+    lastMs: 0,
+    /* peak tracking — useful for spotting GC spikes on iPad */
+    peakMs: 0,
+    peakResetAt: 0,
+    /* ── session-wide stats (reset at startGame, read at gameover) ── */
+    sess: null,
+  };
+  function _newSession() {
+    return {
+      startTs: performance.now(),
+      endTs:   0,
+      frames:  0,
+      totalMs: 0,
+      minMs:   Infinity,
+      maxMs:   0,
+      /* histogram of frame ms — bins: <17, 17-22, 22-33, 33-50, 50-100, >100 */
+      bins:    [0, 0, 0, 0, 0, 0],
+      jank50:  0,    /* frames > 50 ms (visible stutter) */
+      jank100: 0,    /* frames > 100 ms (severe stutter / GC) */
+      tierLog: [],   /* [{t, tier}] — first entry written at session start */
+      maxParts: 0,
+      maxHelis: 0,
+      maxBullets: 0,
+      maxDom: 0,
+      heapStartMb: 0,
+      heapPeakMb:  0,
+    };
+  }
+  function sessionReset() {
+    state.sess = _newSession();
+    state.sess.tierLog.push({ t: 0, tier: _curTier });
+    if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+      const mb = performance.memory.usedJSHeapSize / 1048576;
+      state.sess.heapStartMb = mb;
+      state.sess.heapPeakMb  = mb;
+    }
+  }
+  function sessionEnd() {
+    if (!state.sess) return null;
+    state.sess.endTs = performance.now();
+    return state.sess;
+  }
+  function logTierChange(newTier) {
+    if (!state.sess) return;
+    const t = (performance.now() - state.sess.startTs) / 1000;
+    state.sess.tierLog.push({ t, tier: newTier });
+  }
+  function ensureNode() {
+    if (state.el) return state.el;
+    const d = document.createElement('div');
+    d.id = 'perf-hud';
+    /* Inline styles so we don't depend on stylesheet load order and so
+       no app-level rule can accidentally apply a filter/backdrop-filter
+       to it (which would skew the GPU cost we're trying to measure). */
+    Object.assign(d.style, {
+      position: 'fixed',
+      top: '8px',
+      right: '8px',
+      zIndex: '99999',
+      padding: '6px 8px',
+      font: '600 11px/1.35 ui-monospace,Menlo,Consolas,monospace',
+      color: '#7CFFB2',
+      background: 'rgba(0,0,0,0.62)',
+      borderRadius: '8px',
+      pointerEvents: 'none',
+      whiteSpace: 'pre',
+      letterSpacing: '0.2px',
+      textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+      /* Explicitly NEUTRALISE inherited fanciness */
+      backdropFilter: 'none',
+      WebkitBackdropFilter: 'none',
+      filter: 'none',
+      transform: 'translateZ(0)',
+      contain: 'layout paint',
+    });
+    document.body.appendChild(d);
+    state.el = d;
+    return d;
+  }
+  function render() {
+    if (!state.enabled || !state.el) return;
+    /* Compute rolling avg over last sCount samples */
+    let sum = 0;
+    const n = Math.max(1, state.sCount);
+    for (let i = 0; i < n; i++) sum += state.samples[i];
+    const avgMs = sum / n;
+    const fps = avgMs > 0 ? (1000 / avgMs) : 0;
+    /* Reset peak every 2 s so a single GC spike doesn't mask everything */
+    const now = performance.now();
+    if (now - state.peakResetAt > 2000) {
+      state.peakResetAt = now;
+      state.peakMs = state.lastMs;
+    }
+    const partsLen = (typeof parts !== 'undefined' && parts) ? parts.length : 0;
+    const heliLen  = (typeof helis !== 'undefined' && helis) ? helis.length : 0;
+    const bulLen   = (typeof bullets !== 'undefined' && bullets) ? bullets.length : 0;
+    const domNodes = document.getElementsByTagName('*').length;
+    let mem = '';
+    if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+      const mb = performance.memory.usedJSHeapSize / 1048576;
+      mem = `\nheap   ${mb.toFixed(1)} MB`;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const vp  = `${innerWidth}×${innerHeight}`;
+    state.el.textContent =
+      `fps    ${fps.toFixed(1)}  (${avgMs.toFixed(1)}ms)\n` +
+      `frame  ${state.lastMs.toFixed(1)}ms  pk ${state.peakMs.toFixed(1)}\n` +
+      `tier   ${_curTier}\n` +
+      `parts  ${partsLen}/${PARTICLE_CAP}\n` +
+      `helis  ${heliLen}\n` +
+      `bul    ${bulLen}\n` +
+      `dom    ${domNodes}\n` +
+      `vp     ${vp} @${dpr}x` + mem;
+  }
+  function pushFrame(ms) {
+    if (!state.enabled) return;
+    state.lastMs = ms;
+    if (ms > state.peakMs) state.peakMs = ms;
+    /* Skip absurd values (tab background) so the rolling avg stays useful */
+    if (ms > 500) return;
+    state.samples[state.sIdx] = ms;
+    state.sIdx = (state.sIdx + 1) % state.samples.length;
+    if (state.sCount < state.samples.length) state.sCount++;
+    /* Session aggregation — only counts frames between sessionReset/End */
+    const s = state.sess;
+    if (s) {
+      s.frames++;
+      s.totalMs += ms;
+      if (ms < s.minMs) s.minMs = ms;
+      if (ms > s.maxMs) s.maxMs = ms;
+      if (ms > 100)      s.jank100++;
+      else if (ms > 50)  s.jank50++;
+      /* Histogram bins (ms): <17, 17-22, 22-33, 33-50, 50-100, >100 */
+      const b = ms < 17 ? 0 : ms < 22 ? 1 : ms < 33 ? 2 : ms < 50 ? 3 : ms < 100 ? 4 : 5;
+      s.bins[b]++;
+      /* Live counts of running collections — sample cheaply each frame */
+      if (typeof parts   !== 'undefined' && parts.length   > s.maxParts)   s.maxParts   = parts.length;
+      if (typeof helis   !== 'undefined' && helis.length   > s.maxHelis)   s.maxHelis   = helis.length;
+      if (typeof bullets !== 'undefined' && bullets.length > s.maxBullets) s.maxBullets = bullets.length;
+      /* DOM + heap are expensive — only sample once per ~30 frames */
+      if ((s.frames & 31) === 0) {
+        const n = document.getElementsByTagName('*').length;
+        if (n > s.maxDom) s.maxDom = n;
+        if (performance && performance.memory && performance.memory.usedJSHeapSize) {
+          const mb = performance.memory.usedJSHeapSize / 1048576;
+          if (mb > s.heapPeakMb) s.heapPeakMb = mb;
+        }
+      }
+    }
+  }
+  function buildReport() {
+    const s = state.sess;
+    if (!s || s.frames < 2) return null;
+    const durSec = Math.max(0.001, (s.endTs - s.startTs) / 1000);
+    const avgMs  = s.totalMs / s.frames;
+    const avgFps = 1000 / avgMs;
+    /* Real-time effective fps = frames actually rendered / wall-clock seconds */
+    const effFps = s.frames / durSec;
+    /* % of frames in each bin */
+    const pct = s.bins.map(c => (c / s.frames) * 100);
+    const labels = ['<17ms','17-22','22-33','33-50','50-100','>100'];
+    /* Tier summary: list of "[t]→tier" hops, plus dominant tier */
+    const tierStr = s.tierLog
+      .map(e => `${e.t.toFixed(1)}s→${e.tier}`)
+      .join('  ');
+    const heap = s.heapPeakMb ? `${s.heapStartMb.toFixed(1)}→${s.heapPeakMb.toFixed(1)} MB` : 'n/a (Safari)';
+    return {
+      durSec, frames: s.frames, avgFps, effFps,
+      avgMs, minMs: s.minMs, maxMs: s.maxMs,
+      jank50: s.jank50, jank100: s.jank100,
+      bins: s.bins, pct, labels,
+      tierStr, tierLog: s.tierLog,
+      maxParts: s.maxParts, maxHelis: s.maxHelis, maxBullets: s.maxBullets,
+      maxDom: s.maxDom, heap,
+    };
+  }
+  function reportToText(r) {
+    if (!r) return 'No data — game ended too quickly.';
+    const fmtPct = (p, c) => `${labelPad(c)} ${barPct(p)} ${p.toFixed(1)}%  (${r.bins[r.labels.indexOf(c)]})`;
+    function labelPad(s) { return (s + '      ').slice(0, 7); }
+    function barPct(p) {
+      const n = Math.round(p / 5); /* 20 cells = 100% */
+      return '█'.repeat(Math.min(20, n)).padEnd(20, '░');
+    }
+    const lines = [];
+    lines.push(`duration  ${r.durSec.toFixed(1)}s  (${r.frames} frames)`);
+    lines.push(`fps avg   ${r.avgFps.toFixed(1)}   (eff ${r.effFps.toFixed(1)})`);
+    lines.push(`frame ms  avg ${r.avgMs.toFixed(1)}  min ${r.minMs.toFixed(1)}  max ${r.maxMs.toFixed(1)}`);
+    lines.push(`jank      >50ms ${r.jank50}   >100ms ${r.jank100}`);
+    lines.push(`tier      ${r.tierStr}`);
+    lines.push(`peak load parts ${r.maxParts}  helis ${r.maxHelis}  bul ${r.maxBullets}  dom ${r.maxDom}`);
+    lines.push(`heap      ${r.heap}`);
+    lines.push('');
+    lines.push('frame distribution');
+    for (let i = 0; i < r.labels.length; i++) {
+      lines.push('  ' + fmtPct(r.pct[i], r.labels[i]));
+    }
+    return lines.join('\n');
+  }
+  function setEnabled(on) {
+    state.enabled = !!on;
+    try {
+      if (on) localStorage.setItem('dd_perf', '1');
+      else    localStorage.removeItem('dd_perf');
+    } catch (_) {}
+    if (on) {
+      ensureNode();
+      state.el.style.display = 'block';
+      if (!state.timer) state.timer = setInterval(render, 250);
+    } else {
+      if (state.timer) { clearInterval(state.timer); state.timer = null; }
+      if (state.el) state.el.style.display = 'none';
+    }
+  }
+  /* Auto-bootstrap if enabled at load */
+  function init() {
+    if (state.enabled) {
+      ensureNode();
+      state.timer = setInterval(render, 250);
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+  /* Inject the report into the game-over card. Idempotent — replaces
+     any previous panel. Uses a <pre> for fixed-width column alignment
+     (the bar chart relies on it). Styled inline so it works regardless
+     of stylesheet order and stays out of any backdrop-filter ancestors. */
+  function injectGameOverReport() {
+    if (!state.enabled) return;
+    const card = document.querySelector('#gameover .go-card');
+    if (!card) return;
+    const r = buildReport();
+    const text = reportToText(r);
+    let panel = card.querySelector('#perf-report');
+    if (!panel) {
+      panel = document.createElement('pre');
+      panel.id = 'perf-report';
+      Object.assign(panel.style, {
+        margin: '14px auto 0',
+        padding: '12px 14px',
+        maxWidth: '420px',
+        textAlign: 'left',
+        font: '600 11px/1.4 ui-monospace,Menlo,Consolas,monospace',
+        color: '#7CFFB2',
+        background: 'rgba(0,0,0,0.55)',
+        borderRadius: '12px',
+        border: '1px solid rgba(124,255,178,0.25)',
+        whiteSpace: 'pre',
+        overflowX: 'auto',
+        backdropFilter: 'none',
+        WebkitBackdropFilter: 'none',
+      });
+      /* Insert before the buttons so it sits above "Fly again" */
+      const firstBtn = card.querySelector('.go-btn');
+      if (firstBtn) card.insertBefore(panel, firstBtn);
+      else card.appendChild(panel);
+    }
+    panel.textContent = '── PERF REPORT ──\n' + text;
+  }
+  function clearGameOverReport() {
+    const panel = document.querySelector('#gameover #perf-report');
+    if (panel) panel.remove();
+  }
+  return {
+    pushFrame, setEnabled,
+    sessionReset, sessionEnd, logTierChange,
+    injectGameOverReport, clearGameOverReport, buildReport, reportToText,
+    _state: state,
+  };
+})();
+window.__perfHud = (on) => _PERF_HUD.setEnabled(on);
+window.__perfReport = () => {
+  const r = _PERF_HUD.buildReport();
+  return r ? _PERF_HUD.reportToText(r) : 'No active session — start a game first.';
+};
+
 const BG_BASE_PX_PER_FRAME = 1.35;   /* tuned for a gentle parallax at heliSpeed 2.5 */
 const BG_OVER_PX_PER_FRAME = 2.60;   /* foreground moves ~2× faster */
 
@@ -486,10 +799,32 @@ document.addEventListener('mousemove', e => {
   ptx = e.clientX - 50;
   pty = e.clientY - 50;
 }, { passive: true });
+/* Thumb-offset: on touch devices the player flies ~82 px ABOVE the
+   finger, not under it. Without the offset your thumb covers the
+   sprite and obscures the heli you're trying to dodge — the single
+   most common mobile-game complaint. 82 px ≈ average thumb pad + a
+   small safety margin; enough to see clearly, small enough that the
+   control still feels direct and 1:1. Only on touch; mouse/trackpad
+   stays centred under cursor (line-of-sight is not an issue there). */
+const TOUCH_Y_OFFSET = 82;
+/* Multi-touch drag tracking: we LOCK onto the identifier of the first
+   finger that lands on the game area. touchmove then reads that specific
+   finger — not touches[0]. Without this, if the user holds the shoot
+   button with finger A and drags with finger B, `touches[0]` might be
+   the stationary shoot finger and the player won't follow the drag.
+   Locking by identifier makes the two-thumb play style actually work. */
+let _dragTouchId = null;
 document.addEventListener('touchmove', e => {
-  e.preventDefault();
-  ptx = e.touches[0].clientX - 50;
-  pty = e.touches[0].clientY - 50;
+  if (_dragTouchId === null) return;
+  for (let i = 0; i < e.touches.length; i++) {
+    const t = e.touches[i];
+    if (t.identifier === _dragTouchId) {
+      e.preventDefault();
+      ptx = t.clientX - 50;
+      pty = t.clientY - 50 - TOUCH_Y_OFFSET;
+      return;
+    }
+  }
 }, { passive: false });
 
 /* Shoot on click/tap — ignore clicks on UI buttons/controls */
@@ -510,11 +845,29 @@ document.addEventListener('mouseleave', stopFiring);
 document.addEventListener('touchstart', e => {
   if (isUITarget(e.target)) return;
   if ($('startscreen').style.display !== 'none') return;
+  /* Capture the finger identifier so touchmove can track THIS specific
+     finger even if a second finger lands on the shoot button later. */
+  if (_dragTouchId === null && e.changedTouches.length > 0) {
+    _dragTouchId = e.changedTouches[0].identifier;
+  }
   firing = true;
   shootBullet();
 }, { passive: true });
-document.addEventListener('touchend',    stopFiring);
-document.addEventListener('touchcancel', stopFiring);
+/* Clear drag id only when OUR finger lifts — the drag thumb can keep
+   tracking even while the shoot thumb taps/lifts. stopFiring stays on
+   the old "any finger lifted" behaviour because the shoot-btn has no
+   dedicated release handler; gating it here would cause auto-repeat to
+   get stuck whenever the user holds shoot-btn and releases drag. */
+function _clearDragIfOurs(e) {
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    if (e.changedTouches[i].identifier === _dragTouchId) {
+      _dragTouchId = null;
+      return;
+    }
+  }
+}
+document.addEventListener('touchend',    e => { _clearDragIfOurs(e); stopFiring(); });
+document.addEventListener('touchcancel', e => { _clearDragIfOurs(e); stopFiring(); });
 
 /* Shoot-button (mobile) hold-to-fire */
 (() => {
@@ -1764,6 +2117,13 @@ function triggerGameOver(hitEl) {
 
     gameoverEl.classList.add('show');
 
+    /* Perf HUD: end session + inject the report into the card.
+       No-op when the HUD is disabled. */
+    if (typeof _PERF_HUD !== 'undefined') {
+      _PERF_HUD.sessionEnd();
+      _PERF_HUD.injectGameOverReport();
+    }
+
     /* Auto-focus restart button after 400 ms — prevents accidental retap
        and makes keyboard restart work without needing Enter first */
     goTimeout(() => {
@@ -1786,7 +2146,8 @@ let loopToken  = 0;
    the game keeps moving at the SAME world speed — helis just redraw
    at 30 Hz instead of 60. At 30 Hz the motion still reads smoothly
    on a 60 Hz display (no visible judder at this pace). Mid/high keep
-   full 60 fps. We can also live-downgrade once _fpsDowngraded triggers. */
+   full 60 fps. The auto-downgrade chain (high → mid → low) flips the
+   class mid-run and we re-read it each frame. */
 function _shouldThrottleTo30() {
   return document.documentElement.classList.contains('fx-low');
 }
@@ -1795,22 +2156,23 @@ function startLoop() {
   loopActive = true;
   lastTs = 0;
   const tok = loopToken;
-  let _skip = false;
+  /* Timestamp-based 30 fps cap (was every-other-rAF before). The old
+     approach broke on devices whose rAF cadence was already < 60 — e.g.
+     a phone running at 45 fps got halved to 22 fps, which felt awful.
+     This version targets a steady 30 fps regardless of underlying rAF
+     rate: if rAF fires at 60 we run every other frame, at 45 we run
+     ~⅔ of frames, at 30 we run every frame. Never goes below 30. */
+  const TARGET_LOW_MS = 32; /* 1000/30 ≈ 33; subtract 1 ms slack so we don't drop a 31fps frame */
+  let _lastRunTs = 0;
   const step = ts => {
     if (tok !== loopToken || !loopActive) return;
-    /* On low tier: service the loop on every OTHER rAF (≈30 fps).
-       We still call requestAnimationFrame every frame so the callback
-       queue stays healthy — we just skip the expensive work on odd frames.
-       Re-read the flag each frame so the auto-downgrade picks up mid-run. */
     if (_shouldThrottleTo30()) {
-      _skip = !_skip;
-      if (_skip) {
+      if (ts - _lastRunTs < TARGET_LOW_MS) {
         requestAnimationFrame(step);
         return;
       }
-    } else {
-      _skip = false;
     }
+    _lastRunTs = ts;
     loop(ts);
     if (tok === loopToken && loopActive) requestAnimationFrame(step);
   };
@@ -1824,6 +2186,8 @@ function loop(ts) {
   lastTs = ts;
   /* Watch fps; auto-downgrade tier if sustained below threshold. */
   if (!g.over) _maybeAutoDowngrade(rawMs);
+  /* Feed perf HUD (no-op when disabled) */
+  _PERF_HUD.pushFrame(rawMs);
 
   if (!g.over) {
     updatePlayer(dt);
@@ -2083,6 +2447,12 @@ function startGame() {
      "BIGGEST PERF LEVER" block in index.html. Without this class, live
      HUD pills would inherit blur(32px) saturate(200%) from .glass. */
   document.body.classList.add('in-game');
+  /* Perf HUD: reset session counters and clear any prior report panel.
+     No-op when the HUD is disabled. */
+  if (typeof _PERF_HUD !== 'undefined') {
+    _PERF_HUD.sessionReset();
+    _PERF_HUD.clearGameOverReport();
+  }
   $('startscreen').style.display = 'none';
   $('start-bg').style.display    = 'none';
   $('aurora').style.display      = 'none';
