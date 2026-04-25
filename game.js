@@ -523,13 +523,15 @@ const _PERF_HUD = (() => {
       return '█'.repeat(Math.min(20, n)).padEnd(20, '░');
     }
     const lines = [];
-    lines.push(`duration  ${r.durSec.toFixed(1)}s  (${r.frames} frames)`);
-    lines.push(`fps avg   ${r.avgFps.toFixed(1)}   (eff ${r.effFps.toFixed(1)})`);
-    lines.push(`frame ms  avg ${r.avgMs.toFixed(1)}  min ${r.minMs.toFixed(1)}  max ${r.maxMs.toFixed(1)}`);
-    lines.push(`jank      >50ms ${r.jank50}   >100ms ${r.jank100}`);
-    lines.push(`tier      ${r.tierStr}`);
-    lines.push(`peak load parts ${r.maxParts}  helis ${r.maxHelis}  bul ${r.maxBullets}  dom ${r.maxDom}`);
-    lines.push(`heap      ${r.heap}`);
+    /* Lines are sized to fit ~38 chars at 10px monospace — that's the
+       width of the panel inside the .go-card on a 370px-wide card. */
+    lines.push(`dur    ${r.durSec.toFixed(1)}s (${r.frames}f)`);
+    lines.push(`fps    ${r.avgFps.toFixed(1)} (eff ${r.effFps.toFixed(1)})`);
+    lines.push(`ms     avg ${r.avgMs.toFixed(1)}  mn ${r.minMs.toFixed(1)}  mx ${r.maxMs.toFixed(1)}`);
+    lines.push(`jank   >50 ${r.jank50}   >100 ${r.jank100}`);
+    lines.push(`tier   ${r.tierStr}`);
+    lines.push(`peak   p${r.maxParts} h${r.maxHelis} b${r.maxBullets} d${r.maxDom}`);
+    lines.push(`heap   ${r.heap}`);
     lines.push('');
     lines.push('frame distribution');
     for (let i = 0; i < r.labels.length; i++) {
@@ -580,25 +582,30 @@ const _PERF_HUD = (() => {
       panel.id = 'perf-report';
       Object.assign(panel.style, {
         margin: '14px auto 0',
-        padding: '12px 14px',
+        boxSizing: 'border-box',
+        width: '100%',
         maxWidth: '420px',
-        textAlign: 'left',
-        font: '600 11px/1.4 ui-monospace,Menlo,Consolas,monospace',
+        font: '600 10px/1.4 ui-monospace,Menlo,Consolas,monospace',
         color: '#7CFFB2',
         background: 'rgba(0,0,0,0.55)',
         borderRadius: '12px',
         border: '1px solid rgba(124,255,178,0.25)',
-        whiteSpace: 'pre',
-        overflowX: 'auto',
         backdropFilter: 'none',
         WebkitBackdropFilter: 'none',
       });
-      /* Override the .go-card > * animations (which include `animation:
-         fadeUp ... both !important` on fx-low). Dynamically-inserted
-         children don't reliably play that animation — the element ends
-         up frozen at the `from { opacity: 0 }` keyframe and is invisible.
-         Forcing opacity/transform/animation with !important via
-         setProperty bypasses the stylesheet rule entirely. */
+      /* Force-override .go-card cascade. The card has text-align:center
+         which centers each pre-line within the pre and pushes the
+         leftmost characters off-canvas behind the border. The fx-low
+         rule also injects `animation: fadeUp ... both !important` which
+         on a dynamically-inserted child can freeze it at opacity 0.
+         Both must be neutralised with !important via setProperty —
+         inline-style assignment alone won't beat !important. */
+      panel.style.setProperty('text-align', 'left', 'important');
+      panel.style.setProperty('padding', '12px 14px', 'important');
+      panel.style.setProperty('white-space', 'pre', 'important');
+      panel.style.setProperty('overflow-x', 'auto', 'important');
+      panel.style.setProperty('direction', 'ltr', 'important');
+      panel.style.setProperty('display', 'block', 'important');
       panel.style.setProperty('animation', 'none', 'important');
       panel.style.setProperty('opacity',  '1',    'important');
       panel.style.setProperty('transform','none', 'important');
@@ -1100,6 +1107,20 @@ window.flyAgain = flyAgain;
 
 /* ── Particles ─────────────────────────────────────────────────── */
 const parts = [];
+/* Particle-burst budget. Returns the safe number of particles to spawn
+   right now: scaled down by tier (low → ¼, mid → ⅗, high → 1×) AND
+   clamped by remaining cap headroom. Without this, every collectible
+   pickup or kill explosion fires `for (let i = 0; i < 30; i++) parts.push`
+   regardless of cap, and on iPad fx-low parts.length spikes to 100+,
+   tanking tickParticles to ~20 ms/frame. Measured iPad 2023: kill +
+   pickup overlap pushed parts to 124 before this cap was enforced. */
+function _pcap(want) {
+  const t = _curTier;
+  const scale = t === 'low' ? 0.25 : (t === 'mid' ? 0.6 : 1.0);
+  const desired = Math.max(1, Math.ceil(want * scale));
+  const room = Math.max(0, PARTICLE_CAP - parts.length);
+  return Math.min(desired, room);
+}
 /* Hard-cap particles by perf tier — on low-end this halves the canvas
    fill rate burden and the JS loop work inside tickParticles().
    Reads PARTICLE_CAP dynamically (it's a `let` so the auto-downgrade
@@ -1127,6 +1148,10 @@ function spawnTrail(dt) {
 
 function tickParticles(dt) {
   vfxCtx.clearRect(0, 0, vfx.width, vfx.height);
+  /* Belt-and-suspenders cap: even with _pcap()-gated bursts, hard-trim
+     here every frame so any future un-capped push site can't tank perf
+     by silently overflowing to 100+ particles. Drops oldest. */
+  if (parts.length > PARTICLE_CAP) parts.splice(0, parts.length - PARTICLE_CAP);
   /* Swap-and-pop instead of splice(i,1) — splice is O(n) because it
      shifts every element after i. On low-end devices with 60+ dying
      particles per frame this dominated tickParticles(). Swap-and-pop
@@ -1335,7 +1360,7 @@ function collectStar(wrap) {
   checkLevel();
 
   const cx = wrap._x + 26, cy = wrap._top + 26;
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0, N = _pcap(22); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 2.5 + Math.random() * 5;
     parts.push({
@@ -1373,7 +1398,7 @@ function activateSlowmo() {
   setTimeout(() => pop.remove(), 900);
 
   /* Rainbow burst */
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0, N = _pcap(30); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 3 + Math.random() * 5;
     parts.push({
@@ -1409,7 +1434,7 @@ function activateFirePower() {
   firing = true;
 
   /* Pickup burst — fiery radial */
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0, N = _pcap(30); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 3 + Math.random() * 5;
     parts.push({
@@ -1478,7 +1503,7 @@ function activateShield() {
   }
 
   /* Cyan shimmer burst on pickup */
-  for (let i = 0; i < 32; i++) {
+  for (let i = 0, N = _pcap(32); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 3 + Math.random() * 5;
     parts.push({
@@ -1560,7 +1585,7 @@ function collectLife() {
   _updateLivesHud();
 
   /* Pink + gold burst */
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0, N = _pcap(30); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 3 + Math.random() * 5;
     parts.push({
@@ -1601,7 +1626,7 @@ function consumeLife() {
   _updateLivesHud();
 
   /* Save burst — pink shockwave */
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0, N = _pcap(28); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 4 + Math.random() * 5;
     parts.push({
@@ -1658,7 +1683,7 @@ function shootBullet() {
   bullets.push(b);
 
   /* Muzzle flash at gondola */
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0, N = _pcap(8); i < N; i++) {
     const a = (Math.random() - 0.5) * 0.8;
     parts.push({
       x: b._x, y: b._y + 3,
@@ -1696,7 +1721,7 @@ function updateBullets(dt) {
         document.body.appendChild(ex);
         setTimeout(() => ex.remove(), 900);
 
-        for (let k = 0; k < 20; k++) {
+        for (let k = 0, N = _pcap(20); k < N; k++) {
           const a = Math.random() * Math.PI * 2;
           const sp = 2 + Math.random() * 5;
           parts.push({
@@ -1794,7 +1819,7 @@ function checkLevel() {
 let _vigTimer = null;
 function nearMissEffect(x, y) {
   /* Gold particle burst */
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0, N = _pcap(14); i < N; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 2 + Math.random() * 4;
     parts.push({
@@ -2242,10 +2267,17 @@ function loop(ts) {
         document.body.style.setProperty('--speed-tier', targetTier.toFixed(1));
       }
     }
+    /* Repaint stride: how many pixels of bg-scroll we skip between
+       style-writes. On Safari iPad fx-low, each `backgroundPositionX`
+       write triggers a full-layer repaint of a 2400px-wide image —
+       measured at ~8-12 ms per write. Stepping every 3 px instead of
+       every 1 px keeps motion visually smooth (sub-pixel jitter is
+       imperceptible at game speed) but drops bg-paint cost by ~3×. */
+    const _bgStride = _curTier === 'low' ? 3 : 1;
     if (_bgBaseTileW > 0) {
       bgBaseScrollPx = (bgBaseScrollPx + BG_BASE_PX_PER_FRAME * dt * speedMul) % _bgBaseTileW;
       const bgIntPx = bgBaseScrollPx | 0;   /* | 0 is a faster Math.floor for positive floats */
-      if (bgIntPx !== _lastBgBaseWritePx) {
+      if (bgIntPx !== _lastBgBaseWritePx && Math.abs(bgIntPx - _lastBgBaseWritePx) >= _bgStride) {
         _lastBgBaseWritePx = bgIntPx;
         bgBase.style.backgroundPositionX = `${-bgIntPx}px`;
       }
@@ -2253,7 +2285,7 @@ function loop(ts) {
     if (_bgOverTileW > 0) {
       bgOverScrollPx = (bgOverScrollPx + BG_OVER_PX_PER_FRAME * dt * speedMul) % _bgOverTileW;
       const bgIntPx = bgOverScrollPx | 0;
-      if (bgIntPx !== _lastBgOverWritePx) {
+      if (bgIntPx !== _lastBgOverWritePx && Math.abs(bgIntPx - _lastBgOverWritePx) >= _bgStride) {
         _lastBgOverWritePx = bgIntPx;
         bgOver.style.backgroundPositionX = `${-bgIntPx}px`;
         /* Keep the flicker overlay perfectly aligned with the lamps —
@@ -2327,7 +2359,7 @@ function loop(ts) {
       if (isShieldActive(ts)) {
         const cx = h._x + hw / 2;
         const cy = h._top + hh / 2;
-        for (let k = 0; k < 26; k++) {
+        for (let k = 0, N = _pcap(26); k < N; k++) {
           const a = Math.random() * Math.PI * 2;
           const s = 3 + Math.random() * 5;
           parts.push({

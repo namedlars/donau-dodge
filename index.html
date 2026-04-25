@@ -203,6 +203,23 @@
       animation: fadeUp 0.28s var(--ease-smooth) both !important;
     }
     .fx-low #score-pill.pop-gold { animation-name: scorePop !important; }
+    /* ── Low-tier: kill all idle infinite keyframe animations ──────
+       Each `animation: ... infinite` registers a per-frame compositor
+       update for that element. With 5 helis bobbing + 4 pill pulses +
+       3 pickup bobs + player balloon bob = 13+ continuously-animated
+       layers on iPad 2023 fx-low. Together that easily eats 40-60 ms
+       per frame in compositing alone. Static positions look identical
+       within a few seconds of gameplay. The bursts/landings (one-shot
+       animations) still play; only `infinite` ones are killed. */
+    .fx-low #player-icon,
+    .fx-low .heli,
+    .fx-low .pickup,
+    .fx-low #shield-ring,
+    .fx-low #shield-pill,
+    .fx-low #fp-pill,
+    .fx-low #slow-pill {
+      animation: none !important;
+    }
     /* Low tier: further flatten the score pop — drop the brightness
        filter spike; pure scale pop is plenty of feedback. */
     .fx-low #score-pill.pop {
@@ -4208,7 +4225,7 @@
     </div>
   </div>
 
-  <script src="game.js?v=73"></script>
+  <script src="game.js?v=74"></script>
   <script>
     /* ── DonauDodge icon: cursor-proximity balloon tilt ──────────────
        When the pointer is within ~160 px of the balloon's centre, tilt
